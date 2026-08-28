@@ -2,22 +2,22 @@
 
 **Ticket:** Prerequisite for [AFlyingP/PigTree#14](https://github.com/AFlyingP/PigTree/issues/14) (Select the production technology architecture)  
 **Date:** March 2025  
-**Scope:** Authoritative engineering investigation and decision-ready architectural design for the PigTree Windows Presentation Foundation (WPF on .NET 8 / .NET 9) user interface. Covers dense virtualized hierarchical tree-table rendering, hardware-accelerated synchronized treemap visualization, UI Automation (UIA) custom peer semantics, high contrast and theme integration, text scaling and Per-Monitor DPI V2 awareness, out-of-process Rust engine IPC boundary considerations, rejected alternatives, risks, and measurable release gates tied to the 5,000,000-entry universal floor, 60 FPS rendering budget, and accessibility constraints.
+**Scope:** Authoritative engineering investigation and decision-ready architectural design for the PigTree Windows Presentation Foundation (WPF on supported .NET LTS) user interface. Covers dense virtualized hierarchical tree-table rendering, hardware-accelerated synchronized treemap visualization, UI Automation (UIA) custom peer semantics, high contrast and theme integration, text scaling and Per-Monitor DPI V2 awareness, out-of-process Rust engine IPC boundary considerations, rejected alternatives, risks, and measurable release gates tied to the 5,000,000-entry universal floor, 60 FPS rendering budget, and accessibility constraints.
 
 ---
 
 ## 1. Executive Summary & Production Decision Landscape
 
-The accepted PigTree core architecture comprises a high-performance **Rust engine/workers subsystem**, a **WPF (.NET 8 / .NET 9) front-end**, and a **private, short-lived out-of-process Rust session host** providing isolation, privileged scanning coordination, and cross-interface reuse (GUI and CLI).
+The accepted PigTree core architecture comprises a high-performance **Rust engine/workers subsystem**, a **WPF (.NET LTS baseline) front-end**, and a **private, short-lived out-of-process Rust session host** providing isolation, privileged scanning coordination, and cross-interface reuse (GUI and CLI).
 
-To satisfy the mandatory product performance targets ([docs/performance-targets.md](../performance-targets.md))—maintaining a target 60 FPS rendering rate and <= 100 ms interactive query/filter latency budgets at a scale floor of **5,000,000 Directory Entries** while delivering full WCAG 2.1 AA and Windows UI Automation accessibility—the production WPF presentation architecture evaluates and defines:
+To satisfy the mandatory product performance targets ([docs/performance-targets.md](../performance-targets.md))—maintaining a target 60 FPS rendering rate and <= 100 ms interactive query/filter latency budgets at a scale floor of **5,000,000 Directory Entries** while delivering full WCAG 2.1 AA and Windows UI Automation accessibility—the production WPF presentation architecture establishes:
 
-1. **Virtualized Hierarchical Tree-Table:** A **Flattened Virtual Projection Model** rendered via container recycling (`VirtualizingStackPanel.VirtualizationMode="Recycling"`), pixel scrolling (`ScrollUnit="Pixel"`), and a local nonblocking sliding-window cache that satisfies synchronous WPF `IList` indexer access without blocking the UI thread during IPC fetches. Built-in recursive WPF `TreeView` is rejected due to visual tree explosion.
-2. **Hardware-Accelerated Treemap Visualization:** Direct3D 11 / Direct2D hardware rendering hosted seamlessly in WPF via **`System.Windows.Interop.D3DImage`** utilizing DXGI shared surface handles (`IDXGIResource::GetSharedHandle`) bound to Direct3D 9Ex. Cushion shading and gradient borders execute on the GPU via HLSL pixel shaders, completely avoiding WPF Airspace clipping bugs while maintaining 60–120+ FPS continuous panning, zooming, and resizing. Robust lifecycle management includes keyed mutex / double-buffering synchronization, `IsFrontBufferAvailableChanged` handling, explicit device loss recovery, WARP software rasterization, and an accessible non-GPU fallback.
-3. **Seam Placement & Treemap Layout Ownership:** Challenging the necessity of out-of-process treemap pixel layout. Computing geometric partitions (x, y, w, h) inside the presentation layer avoids coupling the Rust engine to viewport pixel dimensions, eliminates IPC chatter on window resize, and preserves clear architectural boundaries.
-4. **Comprehensive UI Automation (UIA) Semantics:** Custom `AutomationPeer` implementations utilizing standard Windows UIA primitives: `ControlType.TreeItem` / `ControlType.DataItem`, fragment navigation (`IRawElementProviderFragment`), `IExpandCollapseProvider`, `ISelectionItemProvider`, `IScrollItemProvider`, hierarchical properties (`Level`, `PositionInSet`, `SizeOfSet`), and critically **`IItemContainerProvider`** with **`IVirtualizedItemProvider`**. `GetChildrenCore()` exposes *only realized rows* (never allocating 5M peers), off-screen discovery is delegated to `ItemContainer`, and `Realize()` only materializes items while viewport scrolling is handled separately by `ScrollIntoView()`.
+1. **Virtualized Hierarchical Tree-Table (Recommended v1 Design):** A **Flattened Virtual Projection Model** implemented via a customized WPF `ListView` with `VirtualizingStackPanel` utilizing container recycling (`VirtualizingStackPanel.VirtualizationMode="Recycling"`), pixel scrolling (`ScrollUnit="Pixel"`), and a local nonblocking **sliding-window page cache**. WPF **never allocates a full 5,000,000-entry descriptor array**; the collection's `Count` is virtualized, and only bounded page slices (e.g. 200–500 rows, consuming < 500 KB) reside in managed memory. Built-in recursive WPF `TreeView` and a full in-memory descriptor array in WPF are rejected.
+2. **Hardware-Accelerated Treemap Visualization:** Direct3D 11 / Direct2D hardware rendering hosted seamlessly in WPF via **`System.Windows.Interop.D3DImage`** using the documented legacy shared surface handle (`D3D11_RESOURCE_MISC_SHARED` via `IDXGIResource::GetSharedHandle`) bound to Direct3D 9Ex. Cushion shading and gradient borders execute on the GPU via HLSL pixel shaders, completely avoiding WPF Airspace clipping bugs. Synchronization follows the documented conservative pipeline: complete D3D11 rendering, invoke `ID3D11DeviceContext::Flush()`, and update `D3DImage` on the UI thread, with a fallback double-buffering/staging copy path if driver behavior is unreliable. Lifecycle handling includes `IsFrontBufferAvailableChanged`, device loss recovery, WARP software rasterization, and an accessible non-GPU fallback.
+3. **Seam Placement & In-Process Treemap Layout:** The out-of-process Rust engine provides semantic weights and hierarchy; the WPF presentation layer computes the geometric $(x, y, w, h)$ squarified partitions locally against viewport dimensions. This prevents leaking display pixel dimensions into the session host, eliminates continuous IPC roundtrips during window resizing, and keeps the engine headless and display-agnostic.
+4. **Comprehensive UI Automation (UIA) Semantics:** Custom `AutomationPeer` implementations utilizing standard Windows UIA primitives: `ControlType.TreeItem` / `ControlType.DataItem`, fragment navigation (`IRawElementProviderFragment`), `IExpandCollapseProvider`, `ISelectionItemProvider`, `IScrollItemProvider`, hierarchical properties (`Level`, `PositionInSet`, `SizeOfSet`), and **`IItemContainerProvider`** with **`IVirtualizedItemProvider`**. `GetChildrenCore()` exposes *only realized visible rows*, preventing 5M peer enumeration. Off-screen search uses `ItemContainer` querying the engine index with strict time bounds; `Realize()` only materializes items without scrolling; and loading placeholders maintain strict `ItemStatus` / `Name` transitions.
 5. **Theme, High Contrast & Text Scaling:** Dynamic resource binding to system theme brushes (`SystemColors`), active query of `SystemParameters.HighContrast` (`SPI_GETHIGHCONTRAST`) to toggle high-contrast luminance palettes and structural border patterns, and full **Per-Monitor V2 DPI** manifest compliance paired with Windows text-scaling factor (`UISettings.TextScaleFactor`) tracking.
-6. **Alignment with In-Review IPC Architecture:** The presentation layer interface aligns with the emerging IPC direction (framed named pipes with schema-versioned serialization, provisional shared-memory bulk buffers), deferring binding transport specifics to the authoritative IPC decision.
+6. **Runtime Policy & IPC Alignment:** Built against the **latest supported .NET LTS at implementation and release time** (e.g. .NET 8 LTS or .NET 10 LTS). The presentation layer interface aligns with the emerging IPC direction (framed named pipes with schema-versioned serialization, provisional shared-memory bulk buffers), deferring transport specifics to the authoritative IPC decision.
 ```
 +---------------------------------------------------------------------------------------------------+
 |                                   WPF Production UI Architecture                                  |
@@ -25,17 +25,17 @@ To satisfy the mandatory product performance targets ([docs/performance-targets.
 |                                                                                                   |
 |   +---------------------------------------+       +-------------------------------------------+   |
 |   |   Dense Virtualized Tree-Table        |       |   Hardware-Accelerated Treemap Canvas     |   |
-|   |   - Flattened Projection (1D List)    |       |   - D3DImage (DXGI Shared Handle)         |   |
+|   |   - Flattened Projection (Virtual)    |       |   - D3DImage (D3D11_RESOURCE_MISC_SHARED) |   |
 |   |   - VirtualizingStackPanel (Recycle)  |       |   - Direct3D 11 / Direct2D Render Target  |   |
 |   |   - Nonblocking Sliding-Window Cache  |       |   - GPU Cushion Shaders / DirectWrite     |   |
-|   |   - IItemContainer / IVirtualized UIA |       |   - Zero Airspace Defect (WPF Blended)    |   |
-|   |   - Pixel Scrolling & Display Text    |       |   - Keyed Mutex / FrontBuffer Recovery    |   |
+|   |   - Bounded ItemContainer / Realize   |       |   - Zero Airspace Defect (WPF Blended)    |   |
+|   |   - Pixel Scrolling & Display Text    |       |   - D3D11 Flush() & FrontBuffer Recovery  |   |
 |   +---------------------------------------+       +-------------------------------------------+   |
 |                       ^                                                 ^                         |
 |                       | (Synchronous IList Window Slices)               | (Local Viewport Layout) |
 |                       v                                                 v                         |
 |   +-------------------------------------------------------------------------------------------+   |
-|   |   WPF Presentation Model & IPC Client Layer (C# / .NET 8 LTS or .NET 9 STS)               |   |
+|   |   WPF Presentation Model & IPC Client Layer (C# on latest supported .NET LTS)             |   |
 |   |   - HighContrast / Theme Monitor       - Per-Monitor V2 DPI & UISettings Scaler           |   |
 |   |   - Bi-directional Node Selection Bus  - Narrator / NVDA UIA Fragment Peer Dispatcher     |   |
 |   |   - Sliding-Window Page Buffer         - In-Process Squarified Treemap Partition Engine   |   |
@@ -59,7 +59,7 @@ To satisfy the mandatory product performance targets ([docs/performance-targets.
 
 ## 2. Normative Performance Targets & Modeled Engineering Budgets
 
-Per [PigTree Domain Architecture (CONTEXT.md)](../../CONTEXT.md) and [Product Performance Targets (docs/performance-targets.md)](../performance-targets.md), the rendering and presentation subsystem must operate within strict deterministic limits. All performance figures below represent **normative design budgets and modeled engineering projections** to be validated in formal benchmarking:
+Per [PigTree Domain Architecture (CONTEXT.md)](../../CONTEXT.md) and [Product Performance Targets (docs/performance-targets.md)](../performance-targets.md), the rendering and presentation subsystem operates under explicit targets. All numeric performance figures represent **normative design budgets and modeled engineering projections** to be validated in formal benchmarking:
 
 | Constraint Dimension | Normative Reference Budget | Universal Release Floor Gate | Verification Mode |
 | :--- | :--- | :--- | :--- |
@@ -76,20 +76,21 @@ Per [PigTree Domain Architecture (CONTEXT.md)](../../CONTEXT.md) and [Product Pe
 ## 3. Virtualized Hierarchical Tree-Table Architecture
 
 ### 3.1 Failure Analysis of Standard WPF TreeView at Scale
-Standard WPF `TreeView` controls (e.g., `System.Windows.Controls.TreeView`) instantiate a recursive hierarchy of `TreeViewItem` containers. In benchmarked WPF implementations, hosting > 50,000 hierarchical nodes causes severe degradation:
-1. **Visual Tree Explosion:** Each realized `TreeViewItem` introduces 10 to 18 underlying `Visual` elements (`Border`, `ToggleButton`, `ContentPresenter`, `ItemsPresenter`, `StackPanel`). At 5,000,000 entries, naive instantiations would require over 60 million `Visual` instances, exceeding 32-bit GDI/user object limits and consuming multiple gigabytes of managed memory.
-2. **Recursive Virtualization Breakdown:** While WPF's `VirtualizingStackPanel` can virtualize top-level items, nested `TreeView` levels require nested `VirtualizingStackPanel` instances. Scrolling vertically requires evaluating nested layout measurements, creating UI thread layout stalls.
+Standard WPF `TreeView` controls instantiate a recursive hierarchy of `TreeViewItem` containers. In benchmarked WPF implementations, hosting > 50,000 hierarchical nodes causes severe degradation:
+1. **Visual Tree Explosion:** Each realized `TreeViewItem` introduces 10 to 18 underlying `Visual` elements (`Border`, `ToggleButton`, `ContentPresenter`, `ItemsPresenter`, `StackPanel`). At 5,000,000 entries, naive instantiations would require over 60 million `Visual` instances, exceeding GDI/user object limits and exhausting managed heap memory.
+2. **Recursive Virtualization Breakdown:** While WPF's `VirtualizingStackPanel` can virtualize top-level items, nested `TreeView` levels require nested `VirtualizingStackPanel` instances. Scrolling vertically requires evaluating nested layout measurements, creating severe UI thread layout stalls.
 3. **Lack of Column Virtualization:** A standard `TreeView` does not natively align multi-column tabular data (Allocated Size, Unique Size, File Counts, % Bars, Timestamps, Coverage Gaps) with horizontal virtualization and header resizing across disparate branch depths.
 
-### 3.2 The Flattened Virtual Projection Model
-To achieve O(1) scrolling and rendering overhead regardless of whether the dataset contains 10,000 or 5,000,000 nodes, the presentation architecture separates the **hierarchical graph model** from the **linear visual projection**:
+### 3.2 The Flattened Virtual Projection Model & Bounded Memory Footprint
+
+To achieve O(1) scrolling and rendering overhead regardless of whether the dataset contains 10,000 or 5,000,000 nodes, the presentation architecture separates the **hierarchical graph model** in the Rust engine from the **linear visual projection** in WPF:
 
 ```
 +---------------------------------------------------------------------------------------------------+
 |                                 Flattened Virtual Projection Model                                |
 +---------------------------------------------------------------------------------------------------+
 |                                                                                                   |
-|   Hierarchical Graph (Rust Engine)              Flattened Visible Projection (WPF Virtual View)   |
+|   Hierarchical Graph (Rust Engine)              Flattened Visible Projection (Virtual Collection) |
 |   [Root: C:\]                                   Idx  Depth  Flags  NodeID  Name          Size     |
 |     |-- [Windows] (Expanded)                    0    0      Exp    101     C:\           450 GB   |
 |     |     |-- [System32] (Expanded)             1    1      Exp    102       Windows      32 GB   |
@@ -102,9 +103,10 @@ To achieve O(1) scrolling and rendering overhead regardless of whether the datas
 +---------------------------------------------------------------------------------------------------+
 ```
 
-#### Structural Mechanics & Memory Sizing:
-* **Linear Array of Visible Rows:** Only expanded, visible nodes occupy an index in the projected array. Collapsed subtrees are omitted from the projection.
-* **Compact Row Descriptor:** Each projected row is described by a fixed-size struct:
+#### Bounded Managed Memory Strategy:
+* **WPF Never Allocates Full 5M Descriptor Array:** The presentation layer exposes an `IList` / `IReadOnlyList` whose `Count` property reflects the total count of projected rows reported by the engine (e.g. 5,000,000), but **no contiguous 5M array is instantiated in C# memory**. Retaining a full in-memory array in WPF (which at 40 bytes per struct would consume ~190.7 MiB of unmanaged heap or significantly more in managed objects) is an explicit **rejected alternative**.
+* **Page-Window Allocation:** WPF retains only a bounded page buffer of active rows (e.g., 200–500 rows centered around the viewport, consuming $< 500\text{ KB}$ of managed memory), ensuring the UI working set remains strictly within the $\le 150\text{ MB}$ budget.
+* **Compact Row Schema:** When materialized in active pages, each row uses a 40-byte compact descriptor:
   ```csharp
   [StructLayout(LayoutKind.Sequential, Pack = 8)]
   public struct VirtualRowDescriptor
@@ -120,28 +122,31 @@ To achieve O(1) scrolling and rendering overhead regardless of whether the datas
       public byte CoverageStatus;   // 1 byte: Known, Unavailable, CoverageGap, Reconciled
   }                                 // Total: Exactly 40 bytes (8-byte aligned)
   ```
-* **Memory Footprint Arithmetic:** At the universal release floor of 5,000,000 entries, holding a complete 1D array of `VirtualRowDescriptor` in memory requires 5,000,000 * 40 bytes = 200,000,000 bytes (~190.7 MiB). When combined with windowed paging where the WPF process only retains active viewport slices, the managed working set remains well below the <= 150 MB budget.
 
 ### 3.3 Synchronous WPF IList Indexing & Nonblocking Sliding-Window Cache
 
-WPF's `VirtualizingStackPanel` requires synchronous element access via `IList[int index]` during its measurement and layout passes. If the requested row is not locally available, the indexer **must not perform synchronous, blocking IPC calls** on the WPF UI thread, which would produce deadlocks and catastrophic UI jank.
+WPF's `VirtualizingStackPanel` requires synchronous element access via `IList[int index]` during layout and measurement. The indexer **must never execute blocking IPC calls** on the UI thread.
 
-#### Sliding-Window Architecture:
-1. **Sliding-Window Buffer:** The presentation model maintains a localized sliding window of realized row data (e.g., N +/- 250 rows centered on the current scroll position).
-2. **Immediate Synchronous Placeholder Return:** When `IList[int index]` experiences a cache miss during rapid scrollbar flings:
-   - The indexer synchronously returns a lightweight **placeholder descriptor** marked with `IsPlaceholder = true` and default placeholder text (e.g. "Loading...").
-   - The UI immediately renders a shimmer / skeleton row container without stalling the layout engine.
-3. **Asynchronous Prefetch Dispatch:** The cache miss triggers an asynchronous range prefetch request over IPC for the missing page window.
-4. **Non-Destructive Container Realization:** When the batch arrives from the Rust engine, the sliding window updates its entries and raises `PropertyChanged` notifications on the realized container view models, smoothly populating the row contents without triggering a full collection reset.
+#### Sliding-Window Architecture & Placeholder Transitions:
+1. **Sliding-Window Cache:** A local ring buffer retains $N \pm 250$ realized row records surrounding the current viewport.
+2. **Immediate Synchronous Placeholder Return:** When `IList[int index]` experiences a cache miss during rapid scrollbar scrubbing:
+   - The indexer synchronously returns a lightweight **placeholder record** with `IsPlaceholder = true`.
+   - `AutomationProperties.ItemStatus` is set to `"Loading"` and `AutomationProperties.Name` reports `"Loading row {index}..."`.
+   - The UI immediately realizes a skeleton/shimmer container without blocking layout.
+3. **Asynchronous Range Fetch:** The cache miss triggers an asynchronous range prefetch over IPC.
+4. **Data Materialization & UIA Notification:** When row data arrives from the engine:
+   - The sliding-window cache populates the row descriptors.
+   - Container view models update their properties without triggering a collection reset.
+   - `AutomationProperties.ItemStatus` transitions to `"Loaded"` (or `""`) and `AutomationProperties.Name` transitions to the observed filesystem object name, raising `AutomationPropertyChangedEvent` for `NameProperty` and `ItemStatusProperty`.
 ---
 
 ## 4. Hardware-Accelerated Synchronized Treemap Architecture
 
 ### 4.1 Comparative Evaluation of Treemap Rendering Options
 
-Rendering an interactive, dense hierarchical treemap containing 10,000–50,000 visible geometric rectangles with cushion shading, category palettes, selection outlines, and sub-millisecond hover hit-testing requires evaluated graphics primitives:
+Rendering an interactive treemap containing 10,000–50,000 visible geometric rectangles with cushion shading, category palettes, selection outlines, and sub-millisecond hover hit-testing requires evaluated graphics primitives:
 
-| Dimension | Option A: WPF `DrawingVisual` / `OnRender` | Option B: Direct3D 11 / Direct2D via `D3DImage` | Option C: DirectComposition / `HwndHost` | Option D: WinRT XAML Islands (`Windows.UI.Composition`) |
+| Dimension | Option A: WPF `DrawingVisual` / `OnRender` | Option B: Direct3D 11 / Direct2D via `D3DImage` (Recommended) | Option C: DirectComposition / `HwndHost` | Option D: WinRT XAML Islands (`Windows.UI.Composition`) |
 | :--- | :--- | :--- | :--- | :--- |
 | **Pipeline Architecture** | Retained MILCore command stream (Direct3D 9Ex) | Direct3D 11 surface shared with Direct3D 9Ex | Separate Win32 child HWND with DXGI swapchain | WinRT container hosting WinUI 3 Composition visual |
 | **Sustained Frame Rate (Modeled)** | 30–45 FPS at 20k rectangles (CPU command bottleneck) | **60–120+ FPS** (Fully GPU accelerated) | **60–120+ FPS** (Direct DWM swapchain) | 60 FPS (Composition engine) |
@@ -151,9 +156,9 @@ Rendering an interactive, dense hierarchical treemap containing 10,000–50,000 
 | **Per-Monitor DPI & Scaling** | Automatic WPF scaling | Direct surface resizing on `WM_DPICHANGED` | Window message synchronization required | Automatic WinRT DPI handling |
 | **Device Loss Recovery** | Handled internally by WPF MILCore | Explicit `D3DERR_DEVICELOST` / `DXGI_ERROR_DEVICE_REMOVED` | Explicit device recreation | Handled by WinRT composition |
 
-### 4.2 Production Direct3D 11 / `D3DImage` Interoperability Pipeline
+### 4.2 Production Direct3D 11 / `D3DImage` Shared Surface Pipeline
 
-The recommended architecture utilizes **`System.Windows.Interop.D3DImage`** hosting an off-screen **Direct3D 11** render target.
+The production architecture utilizes **`System.Windows.Interop.D3DImage`** hosting an off-screen **Direct3D 11** render target via the documented legacy shared handle mechanism.
 
 ```
 +---------------------------------------------------------------------------------------------------+
@@ -169,7 +174,7 @@ The recommended architecture utilizes **`System.Windows.Interop.D3DImage`** host
 |   +-------------------------------------------------------------------------------------------+   |
 |                                               |                                                   |
 |                        Direct3D 9Ex / Direct3D 11 Shared Surface Bridge                           |
-|                        - Keyed Mutex Synchronization (IDXGIKeyedMutex)                            |
+|                        - D3D11_RESOURCE_MISC_SHARED legacy handle (IDXGIResource::GetSharedHandle)|
 |                                               |                                                   |
 |   +-------------------------------------------------------------------------------------------+   |
 |   |   Direct3D 9Ex Context (milcore Interop)                                                  |   |
@@ -181,37 +186,39 @@ The recommended architecture utilizes **`System.Windows.Interop.D3DImage`** host
 |                                               |                                                   |
 |   +-------------------------------------------------------------------------------------------+   |
 |   |   Direct3D 11 Rendering Engine (PigTree Native Renderer)                                  |   |
-|   |   - ID3D11Texture2D (D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)                               |   |
+|   |   - ID3D11Texture2D (Created with D3D11_RESOURCE_MISC_SHARED)                             |   |
 |   |   - Direct2D 1.1 Device Context / DirectWrite Font Layouts                                |   |
 |   |   - HLSL Pixel Shader: Fast Procedural Cushion Treemap Shading                            |   |
-|   |   - Instance Buffer: 50,000 Rectangles (2.0 MB) uploaded via dynamic GPU buffer           |   |
-|   |   - Fallback: D3D_DRIVER_TYPE_WARP Software Rasterizer                                     |   |
+|   |   - Render Complete -> ID3D11DeviceContext::Flush() -> Signal WPF AddDirtyRect()          |   |
+|   |   - Fallback: Double-Buffered Staging Copy & D3D_DRIVER_TYPE_WARP Software Rasterizer     |   |
 |   +-------------------------------------------------------------------------------------------+   |
 |                                                                                                   |
 +---------------------------------------------------------------------------------------------------+
 ```
 
-#### Keyed Mutex & Generation Synchronization:
-To prevent screen tearing and race conditions between the Direct3D 11 render engine and WPF's Direct3D 9Ex compositor:
-1. Create the shared `ID3D11Texture2D` with `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX`.
-2. Query `IDXGIKeyedMutex` from the Direct3D 11 texture and Direct3D 9Ex shared texture.
-3. Direct3D 11 acquires mutex with key `0` (`pKeyedMutex->AcquireSync(0, INFINITE)`), renders geometry/shaders, and releases mutex with key `1` (`pKeyedMutex->ReleaseSync(1)`).
-4. WPF's composition loop locks `D3DImage`, acquires key `1`, signals `AddDirtyRect()`, releases key `0`, and unlocks `D3DImage`.
+#### Documented Synchronization & Surface Pipeline:
+1. **Shared Texture Creation:** The Direct3D 11 render target texture is created with `D3D11_RESOURCE_MISC_SHARED` (legacy shared handle).
+2. **Surface Sharing:** Query `IDXGIResource` from the texture, retrieve the shared handle via `IDXGIResource::GetSharedHandle(&sharedHandle)`, open it on the Direct3D 9Ex device via `IDirect3DDevice9Ex::CreateTexture`, and pass the `IDirect3DSurface9` pointer to `D3DImage.SetBackBuffer()`.
+3. **Documented Execution & Flush Pipeline:**
+   - The Direct3D 11 renderer records and executes drawing commands.
+   - Upon completion, the renderer calls `ID3D11DeviceContext::Flush()` to submit all queued commands to the GPU command buffer.
+   - On the WPF UI thread, `D3DImage.Lock()`, `D3DImage.AddDirtyRect()`, and `D3DImage.Unlock()` are invoked to signal the WPF composition engine.
+   - *Conservative Concurrency Note:* `Flush()` ensures command submission but does not guarantee instantaneous cross-API GPU execution completion on all GPU drivers. The implementation will benchmark target hardware for visual tearing; if driver synchronization anomalies are observed, a double-buffered shared surface pair or an explicit staging copy path will be engaged as a robust fallback.
 
 #### Robust Lifecycle & Failure Recovery:
-* **Front-Buffer Availability Handling:** When the user locks Windows (Ctrl+Alt+Del), switches users, or initiates full-screen transitions, WPF raises **`D3DImage.IsFrontBufferAvailableChanged`**. The renderer listens to this event, immediately pauses active render dispatching while `IsFrontBufferAvailable` is `false`, and invalidates/recreates back buffers once `true`.
-* **DirectX Device Loss Recovery:** If a GPU driver reset occurs (`D3DERR_DEVICELOST`, `DXGI_ERROR_DEVICE_REMOVED`, or `DXGI_ERROR_DEVICE_RESET`), the renderer catches the error, releases all outstanding D3D11 texture interfaces and D3D9Ex pointers, reinitializes the device factories, recreates the shared texture, and calls `D3DImage.SetBackBuffer()`.
-* **WARP & Non-GPU Fallback:** If hardware GPU initialization fails (e.g. in restricted virtualized environments or remote desktop sessions without GPU passthrough), the engine attempts initialization using **`D3D_DRIVER_TYPE_WARP`** (Direct3D 11 high-speed CPU rasterizer). If WARP is unavailable, the UI gracefully falls back to an accessible non-GPU tabular view.
+* **Front-Buffer Availability Handling:** When the user locks Windows (Ctrl+Alt+Del), switches users, or initiates full-screen mode changes, WPF raises **`D3DImage.IsFrontBufferAvailableChanged`**. The renderer immediately pauses rendering while `IsFrontBufferAvailable` is `false`, and invalidates/recreates back buffers once `true`.
+* **DirectX Device Loss Recovery:** If a GPU driver reset occurs (`D3DERR_DEVICELOST`, `DXGI_ERROR_DEVICE_REMOVED`, or `DXGI_ERROR_DEVICE_RESET`), the renderer releases all outstanding D3D11 texture interfaces and D3D9Ex pointers, reinitializes device contexts, recreates the shared texture, and calls `D3DImage.SetBackBuffer()`.
+* **WARP & Non-GPU Fallback:** If hardware GPU initialization fails (e.g. in virtualized environments or remote desktop sessions), the engine initializes using **`D3D_DRIVER_TYPE_WARP`** (Direct3D 11 high-speed CPU rasterizer). If WARP is unavailable, the UI gracefully falls back to an accessible non-GPU tabular view.
 
-### 4.3 Challenging the Seam: Treemap Layout Ownership
+### 4.3 Seam Placement: In-Process Treemap Viewport Layout
 
-An important architectural question is whether the out-of-process Rust engine should compute pixel-space treemap rectangle coordinates (x, y, w, h).
+The production architecture firmly places geometric squarified treemap layout computation ($(x, y, w, h)$) in the **WPF presentation layer**:
 
 ```
 +---------------------------------------------------------------------------------------------------+
 |                            Treemap Layout Ownership Comparison                                    |
 +------------------------------------+--------------------------------------------------------------+
-| Option A: Out-of-Process Layout     | Option B: In-Process Viewport Layout (Recommended)           |
+| Out-of-Process Layout (Rejected)   | In-Process Viewport Layout (Recommended v1)                  |
 +------------------------------------+--------------------------------------------------------------+
 | - Rust engine computes (x,y,w,h)   | - Rust engine provides semantic weights & hierarchy only     |
 | - Layout depends on UI width/height| - WPF / in-process module computes (x,y,w,h) partitions      |
@@ -220,9 +227,7 @@ An important architectural question is whether the out-of-process Rust engine sh
 +------------------------------------+--------------------------------------------------------------+
 ```
 
-#### Architectural Assessment:
-* **Coupling & IPC Overhead:** Having the Rust engine compute (x, y, w, h) bounding boxes requires transmitting window dimensions, DPI scales, and aspect ratios across the IPC boundary whenever the user resizes the window, creating unnecessary IPC roundtrips.
-* **Recommended Seam:** The Rust engine provides the semantic hierarchy and node metrics (Allocated Size, Unique Size, Filtered status). The WPF presentation layer (or an in-process native C#/C++ layout helper) computes the squarified treemap geometric partition directly against local viewport bounds. This maintains clean architectural separation and ensures the Rust session host remains entirely headless and display-agnostic.
+* **Decoupling Display from Domain:** The Rust engine provides semantic node hierarchies and weights (Allocated Size, Unique Size, Filtered status). The WPF presentation layer computes rectangle partitions against current viewport pixel dimensions, eliminating IPC traffic during window resizing and preserving headless engine purity.
 ---
 
 ## 5. UI Automation (UIA) Semantics & Assistive Technology
@@ -248,6 +253,7 @@ The custom tree-table control exposes a standard `AutomationPeer` hierarchy:
 |   TreeTableRowAutomationPeer : UIElementAutomationPeer, IRawElementProviderFragment              |
 |   - ControlType: ControlType.TreeItem or ControlType.DataItem                                     |
 |   - Hierarchy Properties: Level, PositionInSet, SizeOfSet                                         |
+|   - Loading State: ItemStatus ("Loading" -> "Loaded"), Name ("Loading..." -> Entity Name)         |
 |   Implements:                                                                                     |
 |   - ITableItemProvider / IGridItemProvider (Row, Column, RowSpan, ColumnSpan)                     |
 |   - IExpandCollapseProvider (Expand, Collapse, ExpandCollapseState)                               |
@@ -263,11 +269,12 @@ The custom tree-table control exposes a standard `AutomationPeer` hierarchy:
 +---------------------------------------------------------------------------------------------------+
 ```
 
-#### Strict Virtualization Protocol (Preventing 5M-Peer Enumeration):
+#### Strict Virtualization & Non-Blocking Search Protocol:
 1. **`GetChildrenCore()` Boundary:** `GetChildrenCore()` returns **only realized peers** corresponding to rows currently instantiated in the `VirtualizingStackPanel`. It must **never** instantiate or enumerate 5,000,000 peers during a standard UI automation tree walk.
-2. **Off-Screen Item Search via `IItemContainerProvider`:** When assistive technologies search for off-screen rows (e.g. by name or automation ID), they invoke `IItemContainerProvider::FindItemByProperty(pStartAfter, propertyId, value)`.
-3. **Placeholder Returning:** If the searched item is off-screen, `FindItemByProperty` returns a lightweight `TreeTableVirtualItemPeer` placeholder implementing `IRawElementProviderSimple` and `IVirtualizedItemProvider`.
-4. **De-virtualization via `IVirtualizedItemProvider::Realize()`:** Calling `Realize()` materializes the data for the virtualized item into the presentation collection. **`Realize()` does not scroll the viewport.** Bringing the row into view is explicitly handled as a separate step via `IScrollItemProvider::ScrollIntoView()`.
+2. **Off-Screen Item Search via `IItemContainerProvider`:** Assistive technologies search for off-screen rows by invoking `IItemContainerProvider::FindItemByProperty(pStartAfter, propertyId, value)`.
+3. **Non-Blocking Index Query:** `FindItemByProperty` queries the underlying engine projection index with a strict timeout (<= 50 ms). It **never scans unpopulated shimmer placeholders** in the UI container and **never indefinitely blocks the UI thread**.
+4. **Placeholder Returning:** If the searched item is off-screen, `FindItemByProperty` returns a lightweight `TreeTableVirtualItemPeer` placeholder implementing `IRawElementProviderSimple` and `IVirtualizedItemProvider`.
+5. **De-virtualization via `IVirtualizedItemProvider::Realize()`:** Calling `Realize()` materializes data for the item into the presentation collection. **`Realize()` does not scroll the viewport.** Viewport positioning is handled separately by `IScrollItemProvider::ScrollIntoView()`.
 
 ### 5.2 Treemap Canvas Automation Architecture
 Because the treemap canvas is rendered via Direct3D/Direct2D, it contains no native WPF child visual elements. Accessibility is provided by generating a virtual spatial accessibility tree:
@@ -369,33 +376,28 @@ The out-of-process IPC mechanism between the WPF GUI and the private Rust sessio
 
 ---
 
-## 9. Decision Options for Production Grilling
+## 9. Recommended v1 Production Architecture & Technical Seams
 
-To support the architecture selection milestone ([AFlyingP/PigTree#14](https://github.com/AFlyingP/PigTree/issues/14)), key presentation choices are framed with explicit tradeoffs:
-
-### 9.1 Target Runtime Framework: .NET 8 LTS vs .NET 9 STS
-* **Option A: .NET 8 LTS (Long Term Support)**
-  - *Strengths:* 3-year support lifecycle (supported through November 2026); established enterprise deployment baseline; fully mature WPF runtime.
-  - *Tradeoffs:* Requires manual inclusion of modern Windows 11 Fluent styling resource dictionaries; lacks built-in `ThemeMode` API.
-* **Option B: .NET 9 STS (Standard Term Support - Recommended for Prototype/v1)**
-  - *Strengths:* Built-in Windows 11 Fluent theme via `ThemeMode="System"`; improved Per-Monitor DPI V2 non-client area handling; updated DirectWrite integration; experimental Native AOT packaging improvements.
-  - *Tradeoffs:* Shorter 18-month support window (requires upgrading to .NET 10 LTS in late 2025).
-
-### 9.2 Tree-Table UI Implementation Strategy
-* **Option A: Customized `ListView` / `GridView` with `VirtualizingStackPanel` (Recommended)**
-  - *Strengths:* Standard WPF control surface; mature container recycling (`VirtualizationMode.Recycling`); native keyboard navigation and accessibility peer integration; low implementation complexity.
-  - *Tradeoffs:* Requires flattened projection view model and custom indent templates.
-* **Option B: Fully Custom `VirtualizingPanel` with Direct `DrawingVisual` / Text Formatting**
-  - *Strengths:* Maximal layout control; eliminates intermediate `ListViewItem` container allocations.
-  - *Tradeoffs:* Substantial engineering overhead; must manually re-implement focus navigation, column resizing, mouse tracking, and full UI Automation provider pattern hierarchy.
-
-### 9.3 Treemap Geometric Layout Computation Placement
-* **Option A: In-Process Presentation Layer (Recommended)**
-  - *Strengths:* Decoupled from session host; zero IPC roundtrips on window resize or DPI changes; Rust engine remains headless and display-agnostic.
-  - *Tradeoffs:* Computes squarified partitions in C# (or an in-process native helper) on the UI client.
-* **Option B: Out-of-Process Rust Session Host**
-  - *Strengths:* Leverages multi-threaded Rust Rayon partition engine.
-  - *Tradeoffs:* Leaks viewport pixel dimensions into session host; generates continuous IPC requests during window resize gestures.
+```
++---------------------------------------------------------------------------------------------------+
+|                                Recommended v1 Production Stack                                    |
++--------------------------+------------------------------------------------------------------------+
+| Subsystem Component      | Selected Technology & Architecture                                     |
++--------------------------+------------------------------------------------------------------------+
+| **Target Runtime**       | **Latest Supported .NET LTS** (e.g. .NET 8 LTS or .NET 10 LTS)         |
+| **Tree-Table Grid**      | **Customized WPF `ListView` with `VirtualizingStackPanel`**            |
+| **Tree Virtualization**  | `VirtualizationMode="Recycling"`, `ScrollUnit="Pixel"`, Display text    |
+| **Tree Memory Model**    | **Virtual Count + Bounded Sliding-Window Page Buffer (< 500 KB)**      |
+| **Treemap Renderer**     | **`D3DImage`** hosting **Direct3D 11** / **Direct2D 1.1** Surface     |
+| **Treemap Surface Handle**| **`D3D11_RESOURCE_MISC_SHARED`** legacy handle shared with D3D9Ex    |
+| **Treemap Sync Pipeline**| **Complete Render -> D3D11 Flush() -> UI Thread D3DImage DirtyRect**   |
+| **Treemap Layout Seam**  | **In-Process Presentation Layer** (Decoupled from session host)        |
+| **Treemap Shading**      | Custom HLSL Pixel Shader (GPU procedural cushion shading)              |
+| **Treemap Fallback**     | **`D3D_DRIVER_TYPE_WARP`** software rasterizer + Non-GPU tabular view |
+| **Accessibility**        | Custom `AutomationPeer` with `IItemContainerProvider` & `IVirtualized`|
+| **DPI & Scaling**        | **Per-Monitor V2 DPI** + `UISettings.TextScaleFactor` tracking       |
++--------------------------+------------------------------------------------------------------------+
+```
 
 ---
 
@@ -405,21 +407,25 @@ To support the architecture selection milestone ([AFlyingP/PigTree#14](https://g
 * **Technical Reason for Rejection:** Instantiates recursive visual container trees (`TreeViewItem`) that cause O(N) memory allocations. At 5,000,000 entries, this causes catastrophic out-of-memory crashes (> 4 GB managed allocations) and disables horizontal column virtualization across multi-level hierarchies.
 * **Replacement:** Linear Flattened Virtual Projection with `VirtualizingStackPanel.VirtualizationMode="Recycling"`.
 
-### 2. Direct Win32 / DirectComposition `HwndHost` for Treemap
+### 2. Full 5M Descriptor Array Allocation in WPF
+* **Technical Reason for Rejection:** Allocating a contiguous 5,000,000-entry descriptor array in WPF managed memory consumes ~190.7 MiB of unmanaged heap or hundreds of megabytes of managed objects, causing garbage collection pauses and exceeding the UI working set budget.
+* **Replacement:** Virtualized `Count` with a bounded sliding-window page cache (< 500 KB active data).
+
+### 3. Direct Win32 / DirectComposition `HwndHost` for Treemap
 * **Technical Reason for Rejection:** Hosting an unmanaged Win32 window (`HWND`) inside WPF suffers from the permanent **WPF Airspace Defect**: the child HWND always paints on top of WPF elements, preventing native WPF context menus, tooltips, selection overlays, and flyout sheets from rendering over the treemap without brittle, transparent Win32 layered popup workarounds.
 * **Replacement:** Direct3D 11 shared texture surface hosted via `System.Windows.Interop.D3DImage`, which integrates natively into WPF's composition pipeline without airspace clipping.
 
-### 3. Pure WPF `DrawingVisual` / `OnRender` for Treemap
+### 4. Pure WPF `DrawingVisual` / `OnRender` for Treemap
 * **Technical Reason for Rejection:** WPF's retained-mode `DrawingVisual` serializes drawing instructions into MILCore command buffers on the UI thread. Rendering > 20,000 distinct rectangles with gradient cushion shading drops frame rates to 20–35 FPS and creates garbage collection churn during interactive resizing and panning.
 * **Replacement:** Direct3D 11 / Direct2D GPU rendering via `D3DImage`.
 
-### 4. WinRT XAML Islands (`WindowsXamlHost` / WinUI 3 Composition)
-* **Technical Reason for Rejection:** Introduces significant runtime packaging dependencies (Windows App SDK runtime, DWriteCore, MRT Core), version pinning issues between .NET and WinAppSDK, and additional airspace/focus boundaries without offering rendering throughput advantages over native Direct3D 11 `D3DImage`.
-* **Replacement:** Pure WPF .NET 9 with `D3DImage` interop.
+### 5. Out-of-Process Treemap Pixel Layout in Session Host
+* **Technical Reason for Rejection:** Computing pixel coordinates $(x, y, w, h)$ inside the Rust session host leaks viewport pixel dimensions and DPI scales across the process boundary, causing continuous IPC roundtrips during window resizing gestures.
+* **Replacement:** In-process presentation-layer geometric layout calculation.
 
-### 5. Chromium / WebView2 Canvas Treemap
-* **Technical Reason for Rejection:** Introduces large memory overhead (> 150 MB base WebView2 runtime), complex multi-process IPC hops (Rust -> C# -> WebView2 renderer process), and high serialization latency for 5M-node datasets across the web-message boundary.
-* **Replacement:** In-process Direct3D 11 GPU rendering via `D3DImage`.
+### 6. WinRT XAML Islands (`WindowsXamlHost` / WinUI 3 Composition)
+* **Technical Reason for Rejection:** Introduces significant runtime packaging dependencies (Windows App SDK runtime, DWriteCore, MRT Core), version pinning issues between .NET and WinAppSDK, and additional airspace/focus boundaries without offering rendering throughput advantages over native Direct3D 11 `D3DImage`.
+* **Replacement:** Pure WPF on supported .NET LTS with `D3DImage` interop.
 
 ---
 
@@ -430,7 +436,7 @@ To support the architecture selection milestone ([AFlyingP/PigTree#14](https://g
 | **DirectX Device Loss** | High | GPU driver reset or monitor sleep causes `D3DERR_DEVICELOST` or `DXGI_ERROR_DEVICE_REMOVED`, resulting in black treemap canvas. | Implement explicit device loss recovery in `D3DImage` host: catch device removal, release all D3D11/D3D9Ex texture handles, recreate devices, rebind back buffer, and re-upload cached geometry. |
 | **UI Automation Freeze at 5M Nodes** | High | Screen reader (Narrator/NVDA) attempts full tree walk, causing UI thread lockup. | Implement `IItemContainerProvider` and `IVirtualizedItemProvider` strictly returning placeholder peers; do not instantiate full peers for off-screen items until `Realize()` is called. |
 | **IPC Buffer Saturation on Rapid Scroll** | Medium | User flings scrollbar across 5M rows, flooding Named Pipe with range requests. | Implement request throttling/debouncing in WPF presentation layer: only latest viewport request is dispatched; obsolete in-flight requests are dropped. |
-| **Shared Memory Handle Leak** | Medium | Abnormal termination of Rust engine leaves dangling memory map handles. | Use anonymous shared memory with process-lifetime binding; ensure WPF monitors Rust child process handle (`Process.Exited`) and tears down memory views immediately. |
+| **D3D11/D3D9Ex Driver Desynchronization** | Medium | GPU driver fails to synchronize shared surface commands despite `Flush()`, causing tearing. | Benchmark target GPUs; if tearing is observed, engage a double-buffered shared surface pair or staging copy fallback path. |
 | **Per-Monitor DPI Visual Tearing** | Low | Window dragged across monitors with different DPIs causes momentary blur or clipping. | Handle `WM_DPICHANGED` synchronously; update Direct3D viewport and DirectWrite factory before triggering `AddDirtyRect`. |
 
 ---
@@ -490,30 +496,27 @@ Before approving the presentation layer for production release, the implementati
 6. **Microsoft Learn: `D3DImage.IsFrontBufferAvailable` Property**  
    *URL:* [https://learn.microsoft.com/en-us/dotnet/api/system.windows.interop.d3dimage.isfrontbufferavailable](https://learn.microsoft.com/en-us/dotnet/api/system.windows.interop.d3dimage.isfrontbufferavailable)  
    *Citations:* Front-buffer availability tracking, `IsFrontBufferAvailableChanged` event, screen-lock handling.
-7. **Microsoft Learn: `IDXGIKeyedMutex` Interface**  
-   *URL:* [https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nn-dxgi-idxgikeyedmutex](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nn-dxgi-idxgikeyedmutex)  
-   *Citations:* `AcquireSync`, `ReleaseSync`, cross-device Direct3D shared resource synchronization.
-8. **Microsoft Learn: Using `DrawingVisual` Objects**  
+7. **Microsoft Learn: Using `DrawingVisual` Objects**  
    *URL:* [https://learn.microsoft.com/en-us/dotnet/desktop/wpf/graphics-multimedia/using-drawingvisual-objects](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/graphics-multimedia/using-drawingvisual-objects)  
    *Citations:* Retained-mode visual layer, `VisualCollection`, lightweight rendering constraints, hit testing.
-9. **Microsoft Learn: UI Automation TreeItem Control Type**  
+8. **Microsoft Learn: UI Automation TreeItem Control Type**  
    *URL:* [https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-supporttreeitemcontroltype](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-supporttreeitemcontroltype)  
    *Citations:* `UIA_TreeItemControlTypeId`, `ExpandCollapsePattern`, `SelectionItemPattern`, `LevelProperty`, `PositionInSetProperty`.
-10. **Microsoft Learn: UI Automation VirtualizedItem Control Pattern (`IVirtualizedItemProvider`)**  
-    *URL:* [https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingvirtualizeditem](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingvirtualizeditem)  
-    *Citations:* `IVirtualizedItemProvider::Realize`, placeholder automation elements, de-virtualization on demand.
-11. **Microsoft Learn: UI Automation ItemContainer Control Pattern (`IItemContainerProvider`)**  
+9. **Microsoft Learn: UI Automation VirtualizedItem Control Pattern (`IVirtualizedItemProvider`)**  
+   *URL:* [https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingvirtualizeditem](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingvirtualizeditem)  
+   *Citations:* `IVirtualizedItemProvider::Realize`, placeholder automation elements, de-virtualization on demand.
+10. **Microsoft Learn: UI Automation ItemContainer Control Pattern (`IItemContainerProvider`)**  
     *URL:* [https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingitemcontainer](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingitemcontainer)  
     *Citations:* `FindItemByProperty`, virtualized item lookups, programmatic element discovery without full tree enumeration.
-12. **Microsoft Learn: Accessibility Best Practices (WPF / .NET)**  
+11. **Microsoft Learn: Accessibility Best Practices (WPF / .NET)**  
     *URL:* [https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/accessibility-best-practices](https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/accessibility-best-practices)  
     *Citations:* Programmatic access, custom `AutomationPeer` guidelines, keyboard navigation, focus indications.
-13. **Microsoft Learn: High-Contrast Mode & Theming Compatibility**  
+12. **Microsoft Learn: High-Contrast Mode & Theming Compatibility**  
     *URL:* [https://learn.microsoft.com/en-us/windows/win32/w8cookbook/high-contrast-mode](https://learn.microsoft.com/en-us/windows/win32/w8cookbook/high-contrast-mode)  
     *Citations:* `SystemParametersInfo` (`SPI_GETHIGHCONTRAST`), dynamic system colors, 14:1 high-contrast ratios.
-14. **Microsoft Learn: High DPI Desktop Application Development on Windows & Per-Monitor V2**  
+13. **Microsoft Learn: High DPI Desktop Application Development on Windows & Per-Monitor V2**  
     *URL:* [https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows](https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows)  
     *Citations:* Per-Monitor V2 awareness, `WM_DPICHANGED`, non-client scaling, mixed-mode hosting.
-15. **Microsoft Learn: DirectComposition Overview**  
+14. **Microsoft Learn: DirectComposition Overview**  
     *URL:* [https://learn.microsoft.com/en-us/windows/win32/directcomp/directcomposition-overview](https://learn.microsoft.com/en-us/windows/win32/directcomp/directcomposition-overview)  
     *Citations:* Visual trees, DWM hardware-accelerated composition, independent animations, HWND target bindings.
