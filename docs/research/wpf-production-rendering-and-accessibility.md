@@ -12,10 +12,10 @@ The accepted PigTree core architecture comprises a high-performance **Rust engin
 
 To satisfy the mandatory product performance targets ([docs/performance-targets.md](../performance-targets.md))—maintaining a target 60 FPS rendering rate and <= 100 ms interactive query/filter latency budgets at a scale floor of **5,000,000 Directory Entries** while delivering full WCAG 2.1 AA and Windows UI Automation accessibility—the production WPF presentation architecture establishes:
 
-1. **Virtualized Hierarchical Tree-Table (Recommended v1 Design):** A **Flattened Virtual Projection Model** implemented via a customized WPF `ListView` with `VirtualizingStackPanel` utilizing container recycling (`VirtualizingStackPanel.VirtualizationMode="Recycling"`), pixel scrolling (`ScrollUnit="Pixel"`), and a local nonblocking **sliding-window page cache**. WPF **never allocates a full 5,000,000-entry descriptor array**; the collection's `Count` is virtualized, and only bounded page slices (e.g. 200–500 rows, consuming < 500 KB) reside in managed memory. Built-in recursive WPF `TreeView` and a full in-memory descriptor array in WPF are rejected.
+1. **Virtualized Hierarchical Tree-Table (Recommended v1 Design):** A **Flattened Virtual Projection Model** implemented via a customized WPF `ListView` with `VirtualizingStackPanel` utilizing container recycling (`VirtualizingStackPanel.VirtualizationMode="Recycling"`), pixel scrolling (`ScrollUnit="Pixel"`), and a local nonblocking **sliding-window page cache**. WPF **never allocates a full 5,000,000-entry descriptor array or unmanaged name arena**; the collection's `Count` is virtualized, and only bounded active page slices (e.g. 200–500 rows, consuming < 500 KB) reside in managed memory. Built-in recursive WPF `TreeView` and full in-memory descriptor/name arrays in WPF are rejected.
 2. **Hardware-Accelerated Treemap Visualization:** Direct3D 11 / Direct2D hardware rendering hosted seamlessly in WPF via **`System.Windows.Interop.D3DImage`** using the documented legacy shared surface handle (`D3D11_RESOURCE_MISC_SHARED` via `IDXGIResource::GetSharedHandle`) bound to Direct3D 9Ex. Cushion shading and gradient borders execute on the GPU via HLSL pixel shaders, completely avoiding WPF Airspace clipping bugs. Synchronization follows the documented conservative pipeline: complete D3D11 rendering, invoke `ID3D11DeviceContext::Flush()`, and update `D3DImage` on the UI thread, with a fallback double-buffering/staging copy path if driver behavior is unreliable. Lifecycle handling includes `IsFrontBufferAvailableChanged`, device loss recovery, WARP software rasterization, and an accessible non-GPU fallback.
 3. **Seam Placement & In-Process Treemap Layout:** The out-of-process Rust engine provides semantic weights and hierarchy; the WPF presentation layer computes the geometric $(x, y, w, h)$ squarified partitions locally against viewport dimensions. This prevents leaking display pixel dimensions into the session host, eliminates continuous IPC roundtrips during window resizing, and keeps the engine headless and display-agnostic.
-4. **Comprehensive UI Automation (UIA) Semantics:** Custom `AutomationPeer` implementations utilizing standard Windows UIA primitives: `ControlType.TreeItem` / `ControlType.DataItem`, fragment navigation (`IRawElementProviderFragment`), `IExpandCollapseProvider`, `ISelectionItemProvider`, `IScrollItemProvider`, hierarchical properties (`Level`, `PositionInSet`, `SizeOfSet`), and **`IItemContainerProvider`** with **`IVirtualizedItemProvider`**. `GetChildrenCore()` exposes *only realized visible rows*, preventing 5M peer enumeration. Off-screen search uses a bounded local searchable projection index in WPF (~20 bytes/row; 1–10 MB typical, <= 100 MB worst-case flat projection) resolving `FindItemByProperty` synchronously in < 0.1 ms on the calling thread with **zero IPC and zero Dispatcher blocking**; `Realize()` only schedules asynchronous page hydration without scrolling; and loading placeholders maintain strict `ItemStatus` / `Name` transitions.
+4. **Accurate & Conservative UI Automation (UIA) Semantics:** Custom `AutomationPeer` implementations utilizing standard Windows UIA primitives: `ControlType.TreeItem` / `ControlType.DataItem`, fragment navigation (`IRawElementProviderFragment`), `IExpandCollapseProvider`, `ISelectionItemProvider`, `IScrollItemProvider`, and hierarchical properties (`Level`, `PositionInSet`, `SizeOfSet`). `GetChildrenCore()` exposes *only realized visible rows*, preventing 5M peer enumeration. `IItemContainerProvider::FindItemByProperty` is strictly bounded: it resolves exact `AutomationId` / row position tokens and selection states from local tracking structures, and searches `NameProperty` *only across currently realized/cached items*, returning `null` when an item is un-cached. Full-dataset search is handled via the product Search/Filter bar in the Rust engine, not masqueraded as UIA linear scanning. `Realize()` synchronously materializes only already-cached data, otherwise returning a standard `ElementNotAvailableException` / `UIA_E_ELEMENTNOTAVAILABLE`, while `ScrollIntoView()` independently updates the virtual position and initiates sliding-window hydration.
 5. **Theme, High Contrast & Text Scaling:** Dynamic resource binding to system theme brushes (`SystemColors`), active query of `SystemParameters.HighContrast` (`SPI_GETHIGHCONTRAST`) to toggle high-contrast luminance palettes and structural border patterns, and full **Per-Monitor V2 DPI** manifest compliance paired with Windows text-scaling factor (`UISettings.TextScaleFactor`) tracking.
 6. **Runtime Policy & IPC Alignment:** Built against the **latest supported .NET LTS at implementation and release time** (e.g. .NET 8 LTS or .NET 10 LTS). The presentation layer interface aligns with the emerging IPC direction (framed named pipes with schema-versioned serialization, provisional shared-memory bulk buffers), deferring transport specifics to the authoritative IPC decision.
 ```
@@ -28,7 +28,7 @@ To satisfy the mandatory product performance targets ([docs/performance-targets.
 |   |   - Flattened Projection (Virtual)    |       |   - D3DImage (D3D11_RESOURCE_MISC_SHARED) |   |
 |   |   - VirtualizingStackPanel (Recycle)  |       |   - Direct3D 11 / Direct2D Render Target  |   |
 |   |   - Nonblocking Sliding-Window Cache  |       |   - GPU Cushion Shaders / DirectWrite     |   |
-|   |   - Local Compact UIA Search Index    |       |   - Zero Airspace Defect (WPF Blended)    |   |
+|   |   - Bounded Local State & ItemContainer|     |   - Zero Airspace Defect (WPF Blended)    |   |
 |   |   - Pixel Scrolling & Display Text    |       |   - D3D11 Flush() & FrontBuffer Recovery  |   |
 |   +---------------------------------------+       +-------------------------------------------+   |
 |                       ^                                                 ^                         |
@@ -37,9 +37,9 @@ To satisfy the mandatory product performance targets ([docs/performance-targets.
 |   +-------------------------------------------------------------------------------------------+   |
 |   |   WPF Presentation Model & IPC Client Layer (C# on latest supported .NET LTS)             |   |
 |   |   - HighContrast / Theme Monitor       - Per-Monitor V2 DPI & UISettings Scaler           |   |
-|   |   - Bi-directional Node Selection Bus  - Narrator / NVDA UIA Fragment Peer Dispatcher     |   |
-|   |   - Sliding-Window Page Buffer         - In-Process Squarified Treemap Partition Engine   |   |
-|   |   - Bounded Local Search Index (<100MB)- Asynchronous Page Hydration Scheduler            |   |
+|   |   - Bi-directional Node Selection Bus  - Narrator / NVDA / JAWS UIA Peer Dispatcher       |   |
+|   |   - Sliding-Window Page Buffer (<500KB)- In-Process Squarified Treemap Partition Engine   |   |
+|   |   - Tracked Local Selection/Focus IDs  - Virtualized Collection Projection Adapter        |   |
 |   +-------------------------------------------------------------------------------------------+   |
 |                                                |                                                  |
 |                        IPC Boundary (Referenced to Authoritative IPC Decision)                    |
@@ -68,9 +68,9 @@ Per [PigTree Domain Architecture (CONTEXT.md)](../../CONTEXT.md) and [Product Pe
 | **Interactive Latency** | <= 100 ms (p95) for sort, filter, expand | <= 150 ms (p99) under active background scan | ETW trace click-to-render |
 | **Tree-Table Scroll Frame Rate** | **60 FPS** sustained (<= 16.6 ms frame budget) | No frame drop > 33.3 ms (30 FPS transient floor) | DWM frame presentation clock |
 | **Treemap Render Frame Rate** | **60 FPS** during pan/zoom/hover hit-test | GPU render pass <= 8.0 ms; CPU prep <= 5.0 ms | GPU performance counter query |
-| **UI Process Memory Footprint** | <= 150 MB Managed Working Set (WPF GUI) | <= 300 MB Peak Working Set at 5M entries | Process working set telemetry |
-| **UIA Search Resolution** | < 0.1 ms synchronous local index lookup | <= 1.0 ms max resolution time (0 IPC calls) | Automated UIA client benchmark |
-| **Assistive Tech Realization** | <= 50 ms to realize virtualized UIA item | Narrator/NVDA must not cause UI thread freeze | Automated UIA client harness |
+| **UI Process Working Set** | <= 150 MiB Base Managed Working Set (GUI) | <= 300 MiB Peak Working Set at 5M entries | Process working set telemetry |
+| **UIA Search Resolution** | Synchronous local cached resolution | Zero Dispatcher thread deadlocks / IPC stalls | Automated UIA client harness |
+| **Assistive Tech Navigation** | Responsive tree walk & speech output | Zero UI freezes under Narrator/NVDA/JAWS | Screen reader automated harness |
 | **DPI / Display Scale Transitions** | Crisp text, zero blur, zero visual artifact | Instantaneous re-rasterization on `WM_DPICHANGED` | Visual diff & snapshot audit |
 
 ---
@@ -106,8 +106,8 @@ To achieve O(1) scrolling and rendering overhead regardless of whether the datas
 ```
 
 #### Bounded Managed Memory Strategy:
-* **WPF Never Allocates Full 5M Descriptor Array:** The presentation layer exposes an `IList` / `IReadOnlyList` whose `Count` property reflects the total count of projected rows reported by the engine (e.g. 5,000,000), but **no contiguous 5M array of full row descriptors is instantiated in C# memory**. Retaining a full in-memory array of full row records in WPF (which at 40 bytes per struct would consume ~190.7 MiB of unmanaged heap or significantly more in managed objects) is an explicit **rejected alternative**.
-* **Page-Window Allocation:** WPF retains only a bounded page buffer of active rows (e.g., 200–500 rows centered around the viewport, consuming $< 500\text{ KB}$ of managed memory), ensuring the UI working set remains strictly within the $\le 150\text{ MB}$ budget.
+* **WPF Never Allocates Full 5M Descriptor/Name Array:** The presentation layer exposes an `IList` / `IReadOnlyList` whose `Count` property reflects the total count of projected rows reported by the engine (e.g. 5,000,000), but **no contiguous 5M array or global name arena is allocated in WPF memory**. Allocating full arrays in WPF is an explicit **rejected alternative**.
+* **Page-Window Allocation:** WPF retains only a bounded sliding-window page cache of active rows (e.g., 200–500 rows centered around the active viewport, consuming $< 500\text{ KB}$ of managed memory), ensuring the UI working set remains strictly within the $\le 150\text{ MiB}$ budget.
 * **Compact Row Schema:** When materialized in active pages, each row uses a 40-byte compact descriptor:
   ```csharp
   [StructLayout(LayoutKind.Sequential, Pack = 8)]
@@ -266,38 +266,24 @@ The custom tree-table control exposes a standard `AutomationPeer` hierarchy:
 |         v                                                                                         |
 |   TreeTableVirtualItemPeer : AutomationPeer, IRawElementProviderSimple                            |
 |   Implements:                                                                                     |
-|   - IVirtualizedItemProvider (Realize)  ===> Schedules async page hydration (No auto-scroll)      |
+|   - IVirtualizedItemProvider (Realize)  ===> Realizes IF cached; else throws ElementNotAvailable  |
 |                                                                                                   |
 +---------------------------------------------------------------------------------------------------+
 ```
 
-#### Strict Virtualization & Non-Blocking Local Search Protocol:
-1. **`GetChildrenCore()` Boundary:** `GetChildrenCore()` returns **only realized peers** corresponding to rows currently instantiated in the `VirtualizingStackPanel`. It must **never** instantiate or enumerate 5,000,000 peers during a standard UI automation tree walk.
-2. **Local Searchable Projection Index in WPF:** To ensure UI Automation clients (Narrator, NVDA) can search exposed properties without blocking the UI thread or issuing synchronous IPC on the WPF Dispatcher, WPF maintains a **bounded, read-only compact local projection index**:
-   ```csharp
-   [StructLayout(LayoutKind.Sequential, Pack = 4)]
-   public struct SearchableProjectionEntry
-   {
-       public ulong NodeId;          // 8 bytes: Stable row identifier (AutomationId)
-       public uint ParentRowIndex;   // 4 bytes: Parent index for hierarchical navigation
-       public ushort DepthLevel;     // 2 bytes: Level property
-       public byte NodeFlags;        // 1 byte: IsDir, IsExpanded, IsSelected, IsFocused
-       public byte StatusFlags;      // 1 byte: Coverage / observation status
-       public uint NameStringOffset; // 4 bytes: Offset into compact UTF-8 string arena
-   }                                 // Total: Exactly 20 bytes per projected visible row
-   ```
-   - *Memory Footprint & Capped Scope:* For typical expanded projections (50,000 to 500,000 visible rows), this compact unmanaged index consumes only **1.0 to 10.0 MB**. At the theoretical worst-case 5,000,000 fully expanded flat projection floor, the 20-byte struct buffer requires exactly **100 MB** of contiguous unmanaged memory, remaining well within the $\le 150\text{ MB}$ GUI working set budget. The index is updated incrementally via one-way projection delta packets received from the engine.
-3. **Synchronous Non-Blocking `FindItemByProperty` Resolution:** When an assistive technology queries `IItemContainerProvider::FindItemByProperty(pStartAfter, propertyId, value)`:
-   - The method executes a **pure in-memory linear/binary scan of the local compact projection index on the calling thread**.
-   - It completes in **$< 0.1\text{ ms}$ (sub-millisecond budget)** with **zero IPC calls and zero Dispatcher thread blocking**.
-   - It supports exact searching for exposed UIA properties (`NameProperty`, `AutomationIdProperty`, `SelectionItemPattern.IsSelectedProperty`). It does not execute arbitrary full-text unindexed engine queries.
-   - If the matching row is currently virtualized (off-screen / outside the sliding-window page cache), `FindItemByProperty` immediately returns a lightweight `TreeTableVirtualItemPeer` placeholder containing only `(NodeId, RowIndex)`.
-4. **Asynchronous De-virtualization via `IVirtualizedItemProvider::Realize()`:**
-   - Calling `Realize()` is **non-blocking**: it schedules an **asynchronous page hydration request** over IPC for the page window containing `RowIndex`.
-   - `Realize()` **strictly does not scroll the viewport**.
-   - When the hydrated page arrives, container view models update their state, and `AutomationProperties.ItemStatus` transitions from `"Loading"` to `"Loaded"`.
-5. **Decoupled Viewport Positioning via `IScrollItemProvider::ScrollIntoView()`:**
-   - Scrolling the row into view is explicitly handled as an independent operation via `ScrollIntoView()`, which acts after page hydration or updates the virtual scroll offset to trigger viewport container realization.
+#### Bounded UIA Virtualization & Search Protocol:
+1. **`GetChildrenCore()` Boundary:** `GetChildrenCore()` returns **only realized peers** corresponding to rows currently instantiated in the `VirtualizingStackPanel` viewport. It must **never** instantiate or enumerate 5,000,000 peers during a standard UI automation tree walk.
+2. **Accurate, Narrowly Defined `IItemContainerProvider` Scope:** Assistive technologies query container items via `IItemContainerProvider::FindItemByProperty(pStartAfter, propertyId, value)`. The WPF implementation handles this strictly within local, in-memory bounded structures:
+   - **Exact `AutomationId` / Row Identity Lookup:** Resolved immediately when derivable from a stable row-position token (e.g. index) or small local tracking map of active nodes.
+   - **Selection & Focus Properties:** `SelectionItemPattern.IsSelectedProperty` queries are resolved synchronously against WPF's local bounded selection/focus tracking sets (`HashSet<ulong> SelectedNodeIds`).
+   - **`NameProperty` Scope Boundary:** `FindItemByProperty` searches `NameProperty` **only across currently realized / cached items in the sliding-window buffer**. If no cached match exists in the local buffer, `FindItemByProperty` immediately returns `null` (`pRetVal = NULL`).
+   - **Full-Dataset Search Separation:** Full-dataset name, path, and metadata discovery is an explicit product-level Search/Filter operation executed by the out-of-process Rust engine that generates a new filtered projection index. It is **not masqueraded as a UIA `ItemContainer` linear scan over 5M unhydrated items**, completely eliminating cross-process Dispatcher stalls.
+3. **Conservative `IVirtualizedItemProvider::Realize()` Contract:**
+   - `Realize()` operates synchronously and deterministically: if the row's data is **already resident in the local sliding-window cache**, `Realize()` immediately materializes the peer into a full `TreeTableRowAutomationPeer`.
+   - If the row data is **not cached**, `Realize()` throws a standard **`System.Windows.Automation.ElementNotAvailableException`** (mapping to Win32 `UIA_E_ELEMENTNOTAVAILABLE`), consistent with tested Windows UI Automation provider specifications for unavailable virtual items. `Realize()` does not make unsupported claims of asynchronous completion.
+4. **Decoupled Viewport Positioning via `IScrollItemProvider::ScrollIntoView()`:**
+   - Scrolling an item into view is handled independently via `IScrollItemProvider::ScrollIntoView()`.
+   - `ScrollIntoView()` updates the virtual scroll position in the WPF control and triggers sliding-window page hydration, bringing the container into the realized visual viewport.
 
 ### 5.2 Treemap Canvas Automation Architecture
 Because the treemap canvas is rendered via Direct3D/Direct2D, it contains no native WPF child visual elements. Accessibility is provided by generating a virtual spatial accessibility tree:
@@ -410,15 +396,15 @@ The out-of-process IPC mechanism between the WPF GUI and the private Rust sessio
 | **Target Runtime**       | **Latest Supported .NET LTS** (e.g. .NET 8 LTS or .NET 10 LTS)         |
 | **Tree-Table Grid**      | **Customized WPF `ListView` with `VirtualizingStackPanel`**            |
 | **Tree Virtualization**  | `VirtualizationMode="Recycling"`, `ScrollUnit="Pixel"`, Display text    |
-| **Tree Memory Model**    | **Virtual Count + Bounded Sliding-Window Cache + Compact UIA Index**   |
+| **Tree Memory Model**    | **Virtual Count + Bounded Sliding-Window Cache (< 500 KB active data)**|
 | **Treemap Renderer**     | **`D3DImage`** hosting **Direct3D 11** / **Direct2D 1.1** Surface     |
 | **Treemap Surface Handle**| **`D3D11_RESOURCE_MISC_SHARED`** legacy handle shared with D3D9Ex    |
 | **Treemap Sync Pipeline**| **Complete Render -> D3D11 Flush() -> UI Thread D3DImage DirtyRect**   |
 | **Treemap Layout Seam**  | **In-Process Presentation Layer** (Decoupled from session host)        |
 | **Treemap Shading**      | Custom HLSL Pixel Shader (GPU procedural cushion shading)              |
 | **Treemap Fallback**     | **`D3D_DRIVER_TYPE_WARP`** software rasterizer + Non-GPU tabular view |
-| **Accessibility**        | Custom `AutomationPeer` with `IItemContainerProvider` & `IVirtualized`|
-| **UIA Search Engine**    | **Lock-free Local Compact Index (< 0.1 ms synchronous scan, 0 IPC)**   |
+| **Accessibility**        | Custom `AutomationPeer` with bounded `IItemContainerProvider` scope   |
+| **UIA Search Scope**     | **Cached-Item Name Search + Bounded AutomationId / Selection Sets**    |
 | **DPI & Scaling**        | **Per-Monitor V2 DPI** + `UISettings.TextScaleFactor` tracking       |
 +--------------------------+------------------------------------------------------------------------+
 ```
@@ -431,9 +417,9 @@ The out-of-process IPC mechanism between the WPF GUI and the private Rust sessio
 * **Technical Reason for Rejection:** Instantiates recursive visual container trees (`TreeViewItem`) that cause O(N) memory allocations. At 5,000,000 entries, this causes catastrophic out-of-memory crashes (> 4 GB managed allocations) and disables horizontal column virtualization across multi-level hierarchies.
 * **Replacement:** Linear Flattened Virtual Projection with `VirtualizingStackPanel.VirtualizationMode="Recycling"`.
 
-### 2. Full 5M Descriptor Array Allocation in WPF
-* **Technical Reason for Rejection:** Allocating a contiguous 5,000,000-entry full descriptor array in WPF managed memory consumes ~190.7 MiB of unmanaged heap or hundreds of megabytes of managed objects, causing garbage collection pauses and exceeding the UI working set budget.
-* **Replacement:** Virtualized `Count` with a bounded sliding-window page cache (< 500 KB active data) and a separate compact 20-byte local UIA search index.
+### 2. Full 5M Descriptor / Name Array Allocation in WPF
+* **Technical Reason for Rejection:** Allocating a contiguous 5,000,000-entry full descriptor array or global string arena in WPF managed memory causes severe heap bloat, GC pauses, and exceeds the $\le 150\text{ MiB}$ GUI working set budget.
+* **Replacement:** Virtualized `Count` with a bounded sliding-window page cache (< 500 KB active data) and small local selection tracking sets.
 
 ### 3. Direct Win32 / DirectComposition `HwndHost` for Treemap
 * **Technical Reason for Rejection:** Hosting an unmanaged Win32 window (`HWND`) inside WPF suffers from the permanent **WPF Airspace Defect**: the child HWND always paints on top of WPF elements, preventing native WPF context menus, tooltips, selection overlays, and flyout sheets from rendering over the treemap without brittle, transparent Win32 layered popup workarounds.
@@ -447,9 +433,9 @@ The out-of-process IPC mechanism between the WPF GUI and the private Rust sessio
 * **Technical Reason for Rejection:** Computing pixel coordinates $(x, y, w, h)$ inside the Rust session host leaks viewport pixel dimensions and DPI scales across the process boundary, causing continuous IPC roundtrips during window resizing gestures.
 * **Replacement:** In-process presentation-layer geometric layout calculation.
 
-### 6. Synchronous Cross-Process UIA `FindItemByProperty`
-* **Technical Reason for Rejection:** Executing cross-process synchronous IPC inside `FindItemByProperty` on the WPF Dispatcher thread stalls assistive technologies (Narrator / NVDA) and causes UI deadlocks during screen-reader exploration.
-* **Replacement:** Bounded local compact projection index scanning synchronously in $< 0.1\text{ ms}$ on the calling thread with zero IPC.
+### 6. Full-Dataset UIA `ItemContainer` Scanning across IPC
+* **Technical Reason for Rejection:** Executing cross-process synchronous IPC or full-dataset linear searches inside `FindItemByProperty` on the WPF Dispatcher thread stalls assistive technologies (Narrator / NVDA) and causes UI deadlocks during screen-reader exploration.
+* **Replacement:** Bounded `ItemContainer` scope searching cached items and local selection IDs; full discovery is handled via the product Search/Filter bar.
 
 ### 7. WinRT XAML Islands (`WindowsXamlHost` / WinUI 3 Composition)
 * **Technical Reason for Rejection:** Introduces significant runtime packaging dependencies (Windows App SDK runtime, DWriteCore, MRT Core), version pinning issues between .NET and WinAppSDK, and additional airspace/focus boundaries without offering rendering throughput advantages over native Direct3D 11 `D3DImage`.
@@ -462,7 +448,7 @@ The out-of-process IPC mechanism between the WPF GUI and the private Rust sessio
 | Identified Risk | Severity | Failure Mode | Mitigation Strategy |
 | :--- | :--- | :--- | :--- |
 | **DirectX Device Loss** | High | GPU driver reset or monitor sleep causes `D3DERR_DEVICELOST` or `DXGI_ERROR_DEVICE_REMOVED`, resulting in black treemap canvas. | Implement explicit device loss recovery in `D3DImage` host: catch device removal, release all D3D11/D3D9Ex texture handles, recreate devices, rebind back buffer, and re-upload cached geometry. |
-| **UI Automation Dispatcher Stall** | High | Screen reader searches off-screen item, blocking UI thread on synchronous IPC. | Implement local compact projection index scanning in memory (< 0.1 ms); `FindItemByProperty` never performs IPC and returns lightweight placeholder peer immediately. |
+| **UI Automation Dispatcher Stall** | High | Screen reader searches off-screen item, blocking UI thread on synchronous IPC. | Restrict `FindItemByProperty` to cached items and local selection sets; never perform blocking IPC during UIA property queries; return `null` / `ElementNotAvailableException` when un-cached. |
 | **IPC Buffer Saturation on Rapid Scroll** | Medium | User flings scrollbar across 5M rows, flooding Named Pipe with range requests. | Implement request throttling/debouncing in WPF presentation layer: only latest viewport request is dispatched; obsolete in-flight requests are dropped. |
 | **D3D11/D3D9Ex Driver Desynchronization** | Medium | GPU driver fails to synchronize shared surface commands despite `Flush()`, causing tearing. | Benchmark target GPUs; if tearing is observed, engage a double-buffered shared surface pair or staging copy fallback path. |
 | **Per-Monitor DPI Visual Tearing** | Low | Window dragged across monitors with different DPIs causes momentary blur or clipping. | Handle `WM_DPICHANGED` synchronously; update Direct3D viewport and DirectWrite factory before triggering `AddDirtyRect`. |
@@ -481,6 +467,7 @@ Before approving the presentation layer for production release, the implementati
 +------------------+-------------------------------------------------------------+------------------+
 | **Scale Floor**  | Load and display an Analysis Snapshot with 5,000,000 nodes.   | **Zero crash**,  |
 |                  | Verify memory stability over 30 minutes of continuous use.  | Working Set <300MB|
+|                  | Verify base GUI process working set stays <= 150 MiB.       | Base GUI <=150MB |
 +------------------+-------------------------------------------------------------+------------------+
 | **Scroll Rate**  | Vertical scroll sweep across 5,000,000 rows at 1,000 px/s.   | **>= 60 FPS**    |
 |                  | Measure frame times via Windows Performance Toolkit / ETW.  | Max drop < 33ms  |
@@ -491,14 +478,14 @@ Before approving the presentation layer for production release, the implementati
 | **Latency**      | Sort 5,000,000 rows by Allocated Size; filter by extension. | **<= 100 ms**    |
 |                  | Measure time from user click to updated viewport render.    | p95 latency      |
 +------------------+-------------------------------------------------------------+------------------+
-| **UIA Search**   | Execute 1,000 random FindItemByProperty searches across 5M. | **< 0.1 ms/call**|
-|                  | Verify zero IPC calls and zero UI Dispatcher thread stalls. | 0 UI Stalls      |
+| **UIA Search**   | Execute FindItemByProperty queries across cached/uncached.  | **0 IPC Calls**, |
+|                  | Verify zero UI Dispatcher stalls and correct null returns.  | 0 UI Stalls      |
 +------------------+-------------------------------------------------------------+------------------+
 | **Accessibility**| Run Windows Accessibility Insights for Windows automated    | **0 Rule Violations**|
 |                  | scan against Tree-Table and Treemap controls.               | Full UIA Pass    |
 +------------------+-------------------------------------------------------------+------------------+
-| **Screen Reader**| Complete full navigation workflow using Windows Narrator    | **Zero lockup**, |
-|                  | and NVDA across tree-table expansion and treemap cells.     | Correct speech   |
+| **Screen Readers**| Complete full navigation workflows using Windows Narrator, | **Zero lockup**, |
+|                  | NVDA, and JAWS across tree expansion and treemap cells.     | Correct speech   |
 +------------------+-------------------------------------------------------------+------------------+
 | **High Contrast**| Toggle Windows High Contrast (Contrast Themes) at runtime.  | Instant update,  |
 |                  | Verify text contrast >= 4.5:1 and cell boundaries >= 3:1.   | WCAG 2.1 AA Pass |
@@ -536,18 +523,24 @@ Before approving the presentation layer for production release, the implementati
 9. **Microsoft Learn: UI Automation VirtualizedItem Control Pattern (`IVirtualizedItemProvider`)**  
    *URL:* [https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingvirtualizeditem](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingvirtualizeditem)  
    *Citations:* `IVirtualizedItemProvider::Realize`, placeholder automation elements, de-virtualization on demand.
-10. **Microsoft Learn: UI Automation ItemContainer Control Pattern (`IItemContainerProvider`)**  
+10. **Microsoft Learn: `IVirtualizedItemProvider.Realize` Method (WPF / .NET)**  
+    *URL:* [https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.provider.ivirtualizeditemprovider.realize](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.provider.ivirtualizeditemprovider.realize)  
+    *Citations:* `Realize()` contract, converting placeholder to full element reference, synchronous behavior.
+11. **Microsoft Learn: `ElementNotAvailableException` Class (WPF / .NET)**  
+    *URL:* [https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.elementnotavailableexception](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.elementnotavailableexception)  
+    *Citations:* Standard UIA exception raised when target automation element or data is unavailable.
+12. **Microsoft Learn: UI Automation ItemContainer Control Pattern (`IItemContainerProvider`)**  
     *URL:* [https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingitemcontainer](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingitemcontainer)  
     *Citations:* `FindItemByProperty`, virtualized item lookups, programmatic element discovery without full tree enumeration.
-11. **Microsoft Learn: Accessibility Best Practices (WPF / .NET)**  
+13. **Microsoft Learn: Accessibility Best Practices (WPF / .NET)**  
     *URL:* [https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/accessibility-best-practices](https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/accessibility-best-practices)  
     *Citations:* Programmatic access, custom `AutomationPeer` guidelines, keyboard navigation, focus indications.
-12. **Microsoft Learn: High-Contrast Mode & Theming Compatibility**  
+14. **Microsoft Learn: High-Contrast Mode & Theming Compatibility**  
     *URL:* [https://learn.microsoft.com/en-us/windows/win32/w8cookbook/high-contrast-mode](https://learn.microsoft.com/en-us/windows/win32/w8cookbook/high-contrast-mode)  
     *Citations:* `SystemParametersInfo` (`SPI_GETHIGHCONTRAST`), dynamic system colors, 14:1 high-contrast ratios.
-13. **Microsoft Learn: High DPI Desktop Application Development on Windows & Per-Monitor V2**  
+15. **Microsoft Learn: High DPI Desktop Application Development on Windows & Per-Monitor V2**  
     *URL:* [https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows](https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows)  
     *Citations:* Per-Monitor V2 awareness, `WM_DPICHANGED`, non-client scaling, mixed-mode hosting.
-14. **Microsoft Learn: DirectComposition Overview**  
+16. **Microsoft Learn: DirectComposition Overview**  
     *URL:* [https://learn.microsoft.com/en-us/windows/win32/directcomp/directcomposition-overview](https://learn.microsoft.com/en-us/windows/win32/directcomp/directcomposition-overview)  
     *Citations:* Visual trees, DWM hardware-accelerated composition, independent animations, HWND target bindings.
