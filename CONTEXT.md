@@ -155,14 +155,14 @@ A snapshot-relative route derived from a chain of Directory Entries. It is an ob
 An Analysis Snapshot considered solely as an immutable observation from its recorded Observation Interval. Reopening it does not assert that its objects, paths, or values still exist or remain current.
 
 **Reclaimable Allocation**:
-The allocation expected to become free if a specific validated Action Plan succeeds, accounting for known hard links, shared Filesystem Objects, filesystem semantics, and incomplete knowledge. It is reported as an exact value only when proven, otherwise as a defensible range or Unknown.
+The allocation expected to become free if a specific validated Action Plan succeeds, accounting for known Hard Links, shared Filesystem Objects, filesystem semantics, and incomplete knowledge. It is reported as an exact value only when proven, otherwise as a defensible range or Unknown.
 
 **Action Plan**:
-An immutable proposed set of operations over specified Directory Entries and Filesystem Objects, including preconditions, expected relationship changes, expected Reclaimable Allocation, recovery expectations, and known uncertainties. Deleting an entry removes that Directory Entry; it frees object allocation only when no remaining filesystem references preserve that allocation. Hard-link replacement changes which Filesystem Object an entry refers to rather than deleting every alias of either object.
+An immutable proposed set of operations over specified Directory Entries and Filesystem Objects, including preconditions, expected relationship changes, expected Reclaimable Allocation, recovery expectations, and known uncertainties. Deleting an entry removes that Directory Entry; it frees object allocation only when no remaining filesystem references preserve that allocation. Hard Link replacement changes which Filesystem Object an entry refers to rather than deleting every alias of either object.
 
 **Action Risk Class**:
-The operation classification routine, caution, protected, or prohibited, derived from explicit reasons about potential data loss, system disruption, uncertainty, and recoverability. Routine means ordinary safeguards suffice; caution requires focused acknowledgement; protected replaces direct mutation with a native/provider handoff; prohibited means no safe or sufficiently authorized mutation path exists.
-_Avoid_: Safe, numeric score, ML confidence
+The operation classification routine, caution, protected, or prohibited, derived from explicit evidence about potential data loss, system disruption, uncertainty, and recoverability. Routine means ordinary safeguards are sufficient; caution means additional risk or uncertainty requires separate acknowledgement; protected means direct mutation is outside PigTree's generic cleanup authority and belongs to a native/provider workflow; prohibited means no sufficiently bounded and authorized mutation exists.
+_Avoid_: Safety score, danger level, threat tier
 
 **Recovery Class**:
 The declared recovery expectation of an operation, including whether it relies on a Recovery Artifact or is permanent. It does not guarantee that a platform-managed artifact will remain available indefinitely and does not imply immediate Reclaimable Allocation.
