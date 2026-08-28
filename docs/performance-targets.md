@@ -12,19 +12,20 @@
   - `docs/research/everyday-disk-analysis-workflows-and-pain-points.md` (Everyday Workflows & Pain Points) [[5]](#ref-workflows)
   - `docs/research/windows-ui-technologies.md` (Windows UI Technologies Evaluation) [[6]](#ref-ui)
   - `CONTEXT.md` (PigTree Domain Model & Information Architecture) [[7]](#ref-context)
+  - [ADR 0001: Scanning Subsystem and Privilege Architecture](https://github.com/AFlyingP/PigTree/blob/decision/scanning-privilege-architecture/docs/adr/0001-scanning-and-privilege-architecture.md) [[8]](#ref-adr0001)
 
 ---
 
-## 1. Purpose & Non-Negotiable Principles
+## 1. Purpose & Core Principles
 
-This document establishes the authoritative, measurable product-performance targets, resource budgets, and comparative acceptance criteria for PigTree v1. It serves as the primary acceptance source for upcoming architecture and technology selection decisions ([#14](https://github.com/AFlyingP/PigTree/issues/14)) and downstream implementation tickets.
+This document establishes the authoritative, measurable product-performance targets, resource budgets, and comparative acceptance criteria for PigTree v1. It serves as the primary acceptance source for architecture and technology selection decisions ([#14](https://github.com/AFlyingP/PigTree/issues/14)) and downstream implementation tickets.
 
-Performance in PigTree is treated as a core product feature, not an afterthought. However, performance claims are invalid if achieved by compromising safety, domain precision, or accessibility. The following principles are absolute:
+Performance in PigTree is treated as a core product feature, not an afterthought. However, performance claims are invalid if achieved by compromising safety, domain precision, or accessibility. The following principles guide all performance evaluations:
 
 1. **Integrity Over Raw Speed**: Correctness, Coverage, Object Identity, Hard Link accounting, Reparse Point handling, Cloud Files offline placeholder safety, Content Stream fidelity, and capacity reconciliation semantics can never be omitted, truncated, or approximated to claim a faster scan or query time.
-2. **Strict Work Equivalence**: Performance comparisons are meaningful only when evaluating identical Analysis Profiles, Scope Coverage, privilege regimes, scanning architectures, hydration policies, and observable work. Operations performing different underlying work are strictly classified and labeled as non-comparable.
-3. **Fail-Closed Safety**: Under resource exhaustion or system pressure, PigTree must evict optional accelerators, degrade auxiliary caches, or fail honestly with a qualified partial Analysis Snapshot. Silently dropping observed Directory Entries, altering requested Analysis Profiles, or inventing unobserved facts is strictly prohibited.
-4. **Transparent, Reproducible Evidence**: All published performance claims must be backed by public benchmark manifests, verifiable environment specifications, raw iteration counters, and non-parametric statistical confidence intervals. Universal marketing claims such as "Fastest on Windows" or unqualified speedup multipliers are rejected.
+2. **Work Equivalence**: Performance comparisons are meaningful only when evaluating identical Analysis Profiles, Scope Coverage, privilege regimes, scanning architectures, hydration policies, and observable work. Operations performing different underlying work are classified and labeled as non-comparable.
+3. **Fail-Closed Safety**: Under resource exhaustion or system pressure, PigTree must evict optional accelerators, degrade auxiliary caches, or fail honestly with a qualified partial Analysis Snapshot where possible. Silently dropping observed Directory Entries, altering requested Analysis Profiles, or inventing unobserved facts is prohibited.
+4. **Transparent, Reproducible Evidence**: All published performance claims must be backed by public benchmark manifests, verifiable environment specifications, raw iteration counters, and nonparametric statistical confidence intervals. Universal marketing claims such as "Fastest on Windows" or unqualified speedup multipliers are rejected.
 
 ---
 
@@ -39,7 +40,7 @@ Performance budgets in PigTree are organized into three distinct tiers to distin
 | Universal Floor          | Normative Reference Budgets        | Stretch & Stress Goals            |
 | (Release Gate)           | (Pass/Fail Engineering Targets)    | (Post-v1 & Hardware Ceilings)     |
 +--------------------------+------------------------------------+-----------------------------------+
-| - Absolute boundary for  | - Rigorous p95 & median limits on  | - High-stress 10M-entry bounds    |
+| - Absolute boundary for  | - Pass/fail p95 & median limits on | - High-stress 10M-entry bounds    |
 |   all supported systems  |   Mainstream & Performance tiers   | - 24-hour endurance soak runs     |
 | - 5,000,000 Directory    | - Interactive latency <= 100 ms    | - Sub-second live preflight on    |
 |   Entries release floor  | - Governs acceptance for #14       |   10k action plans                |
@@ -50,7 +51,7 @@ Performance budgets in PigTree are organized into three distinct tiers to distin
    - PigTree must maintain full functional capability, responsive interaction, and memory stability across all primary workflows for Scan Targets containing at least **5,000,000 observed Directory Entries** on supported local storage.
    - Any failure, crash, out-of-memory condition, or interactive lockup at or below 5M entries is an immediate release blocker.
 2. **Normative Reference Budgets (Pass/Fail Acceptance Criteria)**:
-   - Precise numeric budgets defined across designated Reference Hardware Tiers for scanning, memory, query, export, duplicate candidate discovery, content verification, and UI frame rates.
+   - Numeric budgets defined across designated Reference Hardware Tiers for scanning, memory, query, export, duplicate candidate discovery, content verification, and UI frame rates.
    - Architectural proposals and technology candidates evaluated in [#14](https://github.com/AFlyingP/PigTree/issues/14) must demonstrate compliance with these budgets to be accepted.
 3. **Stretch & Stress Goals (Informational Engineering Targets)**:
    - High-scale stress testing at **10,000,000 observed Directory Entries** and extended 24-hour soak tests.
@@ -91,7 +92,7 @@ Performance must be evaluated across structured test workloads designed to stres
    - **Local NTFS Volumes**: System drives, general data drives, deep development trees (`node_modules`, `.git`, Cargo target directories).
    - **ReFS, FAT32, exFAT Volumes**: Non-NTFS local partitions and high-capacity external drives.
    - **Removable Media**: High-latency USB flash drives and external storage.
-   - **Cloud Files Offline Placeholders**: OneDrive, iCloud, and SharePoint trees containing dehydrated placeholders with reparse tags (`FILE_FLAG_OPEN_REPARSE_POINT` mandatory; zero hydration allowed).
+   - **Cloud Files Offline Placeholders**: OneDrive, iCloud, and SharePoint trees containing dehydrated placeholders with reparse tags (zero automatic cloud hydration allowed; explicit consented hydration is measured separately and excluded from local verification throughput claims).
    - **Protected & System Trees**: `C:\Windows\WinSxS`, `System Volume Information`, and locked administrator trees requiring graceful handling of Coverage Gaps.
    - **Structural Extremes**: Heavy Hard Link graphs (WinSxS multi-link aliasing), NTFS sparse and compressed files, deeply nested paths (> 260 characters / 32,767 Unicode characters), and files with Alternate Data Streams (ADS).
 2. **Network Storage Boundary**:
@@ -105,7 +106,7 @@ Performance must be evaluated across structured test workloads designed to stres
 
 ## 5. Exact Work Definitions & Equivalence Profiles
 
-A primary defect of legacy disk-analyzer benchmarks is comparing tools performing fundamentally unequal work [[1]](#ref-benchmarks)[[2]](#ref-comparison). PigTree formally defines standard Analysis Profiles and execution regimes to establish rigorous equivalence boundaries.
+A primary defect of legacy disk-analyzer benchmarks is comparing tools performing fundamentally unequal work [[1]](#ref-benchmarks)[[2]](#ref-comparison). PigTree formally defines standard Analysis Profiles and execution regimes to establish clear equivalence boundaries.
 
 ```
 +---------------------------------------------------------------------------------------------------+
@@ -114,27 +115,29 @@ A primary defect of legacy disk-analyzer benchmarks is comparing tools performin
 | Scan Profile / Regime    | Included Observations & Work          | Excluded Work (Timed Apart)   |
 +--------------------------+---------------------------------------+--------------------------------+
 | Core Accounting Profile  | - Directory Entry names & parents     | - Content Stream data reads    |
-| (Standard Traversal or   | - Object Identity & stable File IDs   | - Duplicate candidate grouping |
-| Elevated Direct-MFT)     | - Object kinds (File, Dir, Special)   | - Full hash content verify     |
-|                          | - Logical & Allocated Sizes           | - File export serialization    |
-|                          | - Hard Link & Reparse characteristics | - UI treemap rendering         |
+| (Standard Traversal or   | - Object Identity & File IDs (where   | - Duplicate candidate grouping |
+| Elevated Direct-MFT)     |   supported by filesystem)            | - Full hash content verify     |
+|                          | - Object kinds (File, Dir, Special)   | - File export serialization    |
+|                          | - Logical & Allocated Sizes           | - UI treemap rendering         |
+|                          | - Hard Link & Reparse characteristics |                                |
 |                          | - Cloud offline placeholder status    |                                |
 |                          | - Coverage, Coverage Gaps, Aggregates |                                |
 +--------------------------+---------------------------------------+--------------------------------+
 | Full Metadata Profile    | - All Core Accounting observations    | - Content Stream data reads    |
 | (Standard Traversal or   | - Timestamp Observations (C/M/A/Ch)   | - Duplicate candidate grouping |
-| Elevated Direct-MFT)     | - Windows Owner & Access Rules (DACL) | - Full hash content verify     |
+| Elevated Direct-MFT)     | - Declared Owner & DACL Access Rules  | - Duplicate candidate grouping |
+|                          |   (where permitted/requested)         | - Full hash content verify     |
 |                          | - Storage Characteristics & ADS names | - File export serialization    |
 +--------------------------+---------------------------------------+--------------------------------+
 ```
 
 ### 5.1 Scanning Profiles
-- **Core Accounting Profile**: The baseline analysis required for complete space accounting. Observes Directory Entry names, hierarchical chains, underlying Object Identity (NTFS File ID / ReFS File ID), object kinds, Logical Size, physical Allocated Size, Hard Link reference counting, Reparse Point attributes, Cloud Files offline states, Coverage Gaps, Scope Aggregates, and volume Capacity reconciliation. **Strictly excludes Content Stream byte reading**.
-- **Full Metadata Profile**: Extends Core Accounting by observing all declared v1 metadata: Timestamp Observations (Created, Modified, Accessed, MFT Changed), file Owner (SID/account string), Access Rules (security descriptors/DACLs), explicit Storage Characteristics (compression, sparsity), and Alternate Data Stream identities. **Strictly excludes Content Stream byte reading**.
+- **Core Accounting Profile**: The baseline analysis required for complete space accounting. Observes Directory Entry names, hierarchical chains, underlying Object Identity, object kinds, Logical Size, physical Allocated Size, Hard Link reference counting, Reparse Point attributes, Cloud Files offline states, Coverage Gaps, Scope Aggregates, and volume Capacity reconciliation. Object Identity observations respect filesystem capabilities and Value Knowledge ([[7]](#ref-context)); the profile requests all evidence needed for settled identity and accounting, recording unavailable or unobserved fields with Coverage rather than assuming stable File IDs exist identically across every filesystem. Excludes Content Stream byte reading.
+- **Full Metadata Profile**: Extends Core Accounting by observing all declared v1 metadata requested by the declared profile: Timestamp Observations (Created, Modified, Accessed, MFT Changed), file Owner (SID/account string) and Access Rules (security descriptors/DACLs) where permitted and requested, explicit Storage Characteristics (compression, sparsity), and Alternate Data Stream identities. Unobserved or inaccessible metadata is recorded with Coverage Gaps rather than forcing universal DACL/Owner reads regardless of profile or permissions. Excludes Content Stream byte reading.
 
 ### 5.2 Scanning Regimes
-- **Standard User Traversal Regime (Regime B)**: Medium-integrity execution using standard Win32 and NT directory enumeration APIs (`FindFirstFileExW` / `NtQueryDirectoryFile`). Universal across all filesystems, directory Scan Targets, and standard user accounts [[1]](#ref-benchmarks)[[3]](#ref-scanning).
-- **Elevated Direct-MFT Regime (Regime A)**: Elevated execution with `SeBackupPrivilege` opening raw volume handles (`\\.\C:`) to sequentially parse Master File Table records. Valid exclusively on local NTFS whole-Volume Scan Targets [[1]](#ref-benchmarks)[[3]](#ref-scanning).
+- **Standard User Traversal Regime (Regime B)**: The standard-user scanning regime defined in ADR 0001 [[8]](#ref-adr0001). Traverses directory hierarchies safely under standard user permissions (Medium Integrity). Universal across all filesystems, directory Scan Targets, and standard user accounts [[1]](#ref-benchmarks)[[3]](#ref-scanning).
+- **Elevated Direct-MFT Regime (Regime A)**: Separately gated elevated NTFS whole-volume regime defined in ADR 0001 [[8]](#ref-adr0001). Valid exclusively on local NTFS whole-Volume Scan Targets, subject to parser-safety, elevation, and release gates [[1]](#ref-benchmarks)[[3]](#ref-scanning). Performance targets do not prescribe raw handles, privileges, parser mechanics, or APIs.
 
 *Rule: Standard User Traversal and Elevated Direct-MFT are distinct architectural regimes. Benchmarking must never compare an elevated direct-MFT scan against a standard directory traversal as like-for-like.*
 
@@ -152,9 +155,9 @@ To eliminate ambiguity across automated benchmark runners, all performance timin
 |                                  Analysis Run Lifecycle Events                                    |
 +---------------------------------------------------------------------------------------------------+
 | [Start: Command Accepted]                                                                         |
-|   |--> Dispatch Scan Plan, initiate adapter, first I/O request                                    |
+|   |--> Engine accepts command (Scan Plan creation, dispatch, and initial I/O occur after)         |
 | [Event: First Useful Interactive Result] (T_first)                                                |
-|   |--> Root node & immediate children materialized with provisional Coverage                     |
+|   |--> Root node & immediate children visible and interactively queryable with provisional Coverage|
 | [Event: First Operation Status] (T_status)                                                        |
 |   |--> Progress sink emits first non-zero status / target acknowledgment                          |
 | [Interval: Traversal Phase] (T_traversal = T_final_obs - T_start)                                  |
@@ -170,13 +173,13 @@ To eliminate ambiguity across automated benchmark runners, all performance timin
 ```
 
 ### Detailed Event Definitions:
-1. **Start Event (`T_start`)**: The exact timestamp when the engine accepts the analyze command, completes Scan Plan creation, and initiates its first I/O operation.
-2. **First Useful Interactive Result (`T_first`)**: The timestamp when the root directory and its immediate first-level children are materialized in memory and queryable by client views with provisional Coverage.
+1. **Start Event (`T_start`)**: The exact timestamp when the engine accepts the analyze command. Scan Plan creation, dispatch, and initial I/O occur subsequently.
+2. **First Useful Interactive Result (`T_first`)**: The timestamp when the root directory and its immediate first-level children with provisional Coverage are visible and interactively queryable by the client (not merely materialized in engine memory).
 3. **First Operation Status (`T_status`)**: The timestamp when the engine emits its first structured progress/status notification to the client progress sink.
 4. **Final Observation (`T_final_obs`)**: The timestamp when the underlying scanning adapter finishes enumerating the final directory entry or reading the final MFT record from storage.
 5. **Snapshot Settlement (`T_settled`)**: The timestamp when post-traversal aggregation finishes (Hard Link deduplication settled, volume Capacity reconciliation computed, Scope Coverage finalized), the immutable Analysis Snapshot is sealed, and terminal Run Outcome is emitted.
 6. **Cancellation Acceptance (`T_cancel_ack`)**: The timestamp when a cooperative cancellation request is received and acknowledged by the active engine task.
-7. **Terminal Settlement on Cancel (`T_cancel_settled`)**: The timestamp when all in-flight I/O stops, resources are reclaimed, and a valid qualified partial Analysis Snapshot is sealed.
+7. **Terminal Settlement on Cancel (`T_cancel_settled`)**: The timestamp when all in-flight I/O stops, resources are reclaimed, and terminal cancellation settlement completes. Where available and coherent, the engine may publish a qualified partial Analysis Snapshot, but a partial snapshot is not guaranteed for every cancelled operation.
 
 ---
 
@@ -188,7 +191,7 @@ The following tables define the canonical, binding performance targets for PigTr
 - **p95 (95th Percentile)**: Governs interactive latency, UI responsiveness, tail latencies, and end-to-end operation timeouts to guarantee smooth user experience under worst-case variance.
 - **Median**: Governs sustained throughput, sequential processing rates, and bulk I/O bandwidth to measure central tendency without distortion from single-run outliers.
 - **Warm Cache**: Operating system standby cache populated via a single unmeasured pre-warming run.
-- **Cold Cache**: Controlled operating system file cache and standby list purge (evaluated for relative regression).
+- **Cold Cache**: Controlled operating system cache state reset and standby list purge (evaluated for relative regression).
 
 ---
 
@@ -313,7 +316,9 @@ The following tables define the canonical, binding performance targets for PigTr
 | **Content Progress Heartbeat Gap** | Byte-level verification progress updates | Max Gap <= 500 ms | Pass/Fail |
 | **Mismatch Proof Presentation** | Surfacing verified content inequality | p95 <= 250 ms after proof | Pass/Fail |
 | **Verification Cancellation** | User-aborted content stream verification | p95 <= 1.0 s; hard ceiling <= 2.0 s | Pass/Fail |
-| **Cloud Dehydrated Exclusion** | Offline reparse placeholders in scope | Zero automatic hydration allowed | Pass/Fail |
+| **Cloud Dehydrated Exclusion** | Offline reparse placeholders in scope | Zero automatic cloud hydration allowed | Pass/Fail |
+
+*Note: Explicit consented cloud hydration is permitted as a separate user-requested operation, but is measured independently and excluded from local storage verification throughput claims.*
 
 ---
 
@@ -333,7 +338,7 @@ The following tables define the canonical, binding performance targets for PigTr
 | **Preflight Safety Invariant** | Safety verification checks under load | Zero deadline skips of safety checks | Pass/Fail |
 | **General Task Cancellation** | Cancellation acknowledgment | p95 <= 100 ms | Pass/Fail |
 | **Terminal Cancellation Settlement**| Cease I/O and reach safe clean state | p95 <= 1.0 s; hard ceiling <= 2.0 s | Pass/Fail |
-| **Mutation Rollback Policy** | Interrupted Action Plan execution | Settle at next Commit Point (no fake rollback)| Pass/Fail |
+| **Mutation Rollback Policy** | Interrupted Action Plan execution | Settle at next Commit Point (no unverified rollback)| Pass/Fail |
 
 ---
 
@@ -347,7 +352,7 @@ The following tables define the canonical, binding performance targets for PigTr
 | **Background Low-Impact Regression**| Background scan with active user workflows | Interactive UI latency regression <= 10% | Pass/Fail |
 | **Background CPU Utilization** | Background low-impact execution mode | Average CPU <= 25% of logical processor capacity | Pass/Fail |
 | **Background I/O Throttling** | Background low-impact execution mode | Bounded low-priority I/O; normal memory caps | Pass/Fail |
-| **Effective Throttling Disclosure** | Runtime engine diagnostics | Emit observed throttling status in telemetry | Pass/Fail |
+| **Effective Throttling Disclosure** | Runtime engine diagnostics | Emit observed throttling status in Operation Events / Diagnostics | Pass/Fail |
 
 ---
 
@@ -357,14 +362,16 @@ The following tables define the canonical, binding performance targets for PigTr
 
 | Metric Description | Workload Protocol & Duration | Target Limit & Stability Invariant | Gate Type |
 | :--- | :--- | :--- | :--- |
-| **Standard Soak Test (8 Hours)** | Continuous mixed cycles (scan, reopen, query, candidates, cancel, export) | Retained memory growth <= 5.0% post steady-state; zero handle/thread leaks; all budgets pass | Pass/Fail (Release Gate) |
+| **Standard Soak Test (8 Hours)** | Continuous mixed cycles (scan, reopen, query, candidates, cancel, export) | Retained memory growth <= 5.0% post steady-state; zero handle/thread leaks; interactive and cancellation budgets remain passing | Pass/Fail (Release Gate) |
 | **Pre-Release Stress Soak (24 Hours)**| Extended 24-hour continuous mixed cycle stress | Zero unhandled exceptions, zero data corruption, stable memory slope | Stretch / Confidence |
+
+*Note: Soak testing requires that approved absolute interaction, query, and cancellation budgets remain passing throughout extended operation; individual scan and export throughput rates are subject to mixed cycle contention and are evaluated for memory/handle stability rather than peak isolated throughput.*
 
 ---
 
 ## 8. Caching, Operating Environment & Statistical Protocol
 
-To produce decision-significant benchmarks that resist experimental noise and caching bias, PigTree establishes strict environmental and statistical protocols [[1]](#ref-benchmarks)[[2]](#ref-comparison).
+To produce decision-significant benchmarks that resist experimental noise and caching bias, PigTree establishes clear environmental and statistical protocols [[1]](#ref-benchmarks)[[2]](#ref-comparison).
 
 ```
 +---------------------------------------------------------------------------------------------------+
@@ -372,26 +379,26 @@ To produce decision-significant benchmarks that resist experimental noise and ca
 +-------------------+---------------------------------------+---------------------------------------+
 | Cache State       | Protocol Definition                   | Benchmark Application                 |
 +-------------------+---------------------------------------+---------------------------------------+
-| Warm Cache        | Single unmeasured warmup run immediately | Absolute product performance targets; |
-|                   | prior to measured iterations          | interactive UI & query gating budgets |
+| Warm Cache        | Single unmeasured warmup run          | Absolute product performance targets; |
+|                   | immediately prior to measured runs    | interactive UI & query gating budgets |
 +-------------------+---------------------------------------+---------------------------------------+
-| OS-Cold Cache     | System File Cache & Standby List      | Relative regression gating; cold-to-  |
-|                   | purged via SetSystemFileCacheSize &   | warm multiplier tracking; no single   |
-|                   | NtSetSystemInformation (30s dwell)   | absolute wall-clock gate              |
+| OS-Cold Cache     | Documented OS cache reset (flush file | Relative regression gating; cold-to-  |
+|                   | buffers, purge standby list/working   | warm multiplier tracking; no single   |
+|                   | set), reset evidence, 5.0-s dwell     | absolute wall-clock gate              |
 +-------------------+---------------------------------------+---------------------------------------+
-| Hardware-Cold     | Full system power cycle / unmount     | Special pre-release characterization; |
-| Cache             | with device controller flush          | hardware controller cache dissipation |
+| Hardware-Cold     | Full system power cycle or controller | Specialized pre-release               |
+| Cache             | cache flush procedure                 | characterization                      |
 +-------------------+---------------------------------------+---------------------------------------+
 ```
 
 ### 8.1 Environmental Controls
-1. **Power Management**: Enforce Windows *High Performance* or *Ultimate Performance* power scheme via `powercfg /setactive` to eliminate dynamic CPU clock frequency scaling noise [[1]](#ref-benchmarks)[[2]](#ref-comparison).
-2. **Thermal Stability**: Monitor CPU package temperature and clock frequency via ETW hardware performance counters; automatically reject and invalidate iterations exhibiting thermal throttling.
-3. **Storage & Filesystem Hygiene**: Record physical drive model, firmware version, volume total capacity, free space percentage, filesystem type, cluster allocation size (e.g., 4 KB default), and NTFS volume fragmentation index.
+1. **Power Management & Clock Monitoring**: Pin the Windows power scheme to *High Performance* or *Ultimate Performance* and record the active scheme in the benchmark manifest. Power plans do not guarantee elimination of CPU frequency scaling; CPU clock frequencies, package temperatures, and system noise must be monitored via ETW hardware performance counters, and contaminated normative runs exhibiting thermal throttling or unexpected clock shifts must be rejected and invalidated.
+2. **Thermal Stability**: Record ambient and initial component temperatures; enforce cooldown windows between high-stress iterations to prevent thermal throttling.
+3. **Storage & Filesystem Hygiene**: Record physical drive make/model, firmware revision, volume total capacity, free space percentage, partition filesystem type, cluster allocation size (e.g., 4 KB default), and NTFS volume fragmentation index.
 4. **Security & Antivirus Tracks**:
-   - *Normative Track*: Real-time Windows Defender scanning active on default settings.
-   - *Isolated Baseline Track*: Real-time Defender scanning disabled and target tree added to exclusions to isolate raw engine performance from third-party filter driver latency. Both tracks must be published side-by-side.
-5. **System Services**: Disable Windows Search Indexer (`WSearch`) and SuperFetch/SysMain during formal test runs to eliminate background disk contention. Record status of Hypervisor-Protected Code Integrity (HVCI) and BitLocker drive encryption.
+   - *Normative Real-World Track*: Real-time Windows Defender scanning active on default settings, with standard system services enabled.
+   - *Controlled Lab Track*: Real-time Defender scanning paused or test partition added to exclusions to isolate raw engine performance from filter driver latency. Both tracks must be published side-by-side with clear labeling.
+5. **System Services**: Disclose and record the status of the Windows Search Indexer (`SearchIndexer.exe`) and SuperFetch/SysMain services in the manifest. Disabling Search or SysMain is not required in public comparisons where equivalence with standard Windows default behavior is being measured, but their states must be identical across compared runs. Record Hypervisor-Protected Code Integrity (HVCI) and BitLocker drive encryption status.
 
 ### 8.2 Statistical Rigor & Reporting
 1. **Sample Sizes**:
@@ -399,17 +406,19 @@ To produce decision-significant benchmarks that resist experimental noise and ca
    - Micro Benchmarks (Queries, candidate grouping, preflight steps, frame times): Minimum **$N \ge 20$** measured iterations.
 2. **Summary Statistics**:
    - Report raw iteration values, sample Median, empirical 95th percentile (**p95**), Interquartile Range (**IQR**), Minimum, and Maximum.
-   - Calculate and publish **95% Nonparametric BCa Bootstrap Confidence Intervals** (10,000 resamples) for all medians and p95 estimates.
+   - Empirical p95 and its estimation uncertainty are reported despite small macro sample sizes ($N \ge 10$); p95 release gating budgets use the approved $N \ge 10$ minimum sample size.
+   - Calculate and publish **95% Nonparametric Percentile Bootstrap Confidence Intervals** (10,000 resamples) for all medians, p95 estimates, and relative ratio comparisons.
    - Aggregate rates and throughput using the **Harmonic Mean** (to prevent rate skew); aggregate cross-workload speedup ratios using the **Geometric Mean** [[1]](#ref-benchmarks).
 3. **Outlier & Interference Governance**:
-   - Arbitrary or silent deletion of outlier data points is strictly prohibited.
-   - An iteration may be excluded only if an explicit ETW trace confirms unrelated system interference (such as Windows Update I/O or background AV signature download). The excluded run, concrete ETW reason, and replacement run must be explicitly documented in the benchmark output package.
+   - Outlier statistical flags trigger automated or manual investigation into system traces and diagnostic logs, not automatic data exclusion.
+   - Arbitrary or silent deletion of outlier data points is prohibited.
+   - An iteration may be excluded only if an explicit ETW trace or diagnostic log confirms unrelated external system interference (such as Windows Update I/O or background AV signature updates). The excluded run, concrete reason, and replacement run must be explicitly documented in the benchmark output package.
 
 ---
 
 ## 9. Competitor Comparison Protocol & External Claim Policy
 
-Comparing PigTree against mature commercial products (Antibody Software WizTree and JAM Software TreeSize) requires absolute methodological and licensing integrity [[1]](#ref-benchmarks)[[2]](#ref-comparison).
+Comparing PigTree against mature commercial products (Antibody Software WizTree and JAM Software TreeSize) requires methodical alignment and licensing compliance [[1]](#ref-benchmarks)[[2]](#ref-comparison).
 
 ```
 +---------------------------------------------------------------------------------------------------+
@@ -417,39 +426,60 @@ Comparing PigTree against mature commercial products (Antibody Software WizTree 
 +--------------------------+-----------------------+------------------------+-----------------------+
 | Dimension                | PigTree (Target)      | WizTree (Pinned Build) | TreeSize Pro (Pinned) |
 +--------------------------+-----------------------+------------------------+-----------------------+
-| Pinned Reference Version | Current RC / Main     | WizTree 4.32 x64 [[2]] | TreeSize Pro 9.8.x [[2]]|
+| Pinned Reference Version | Current RC / Main     | Current pinned x64     | Current pinned x64    |
+|                          |                       | release (e.g. 4.32)    | release (e.g. 9.8.x)  |
 | Required License Tier    | Open Source / Core    | Supporter / Commercial | Commercial / Trial    |
-| Direct-MFT Scan Mode     | Elevated Adapter      | Default Admin Mode     | MFT Mode (Admin)      |
-| Standard Traversal Mode  | Win32 / NT Directory  | /admin=0 Traversal     | Win32 Traversal Mode  |
-| Subdirectory Scan Scope  | Native Traversal      | Win32 Subtree Scan     | Win32 Subtree Scan    |
-| Offline Cloud Placeholders| Zero Hydration Flags | Zero Hydration         | Skip Offline Files    |
+| Direct-MFT Scan Mode     | Elevated Direct-MFT   | Elevated Direct-MFT    | Elevated Direct-MFT   |
+| Standard Traversal Mode  | Standard User         | Standard User          | Standard User         |
+|                          | Traversal             | Traversal (/admin=0)   | Traversal             |
+| Subdirectory Scan Scope  | Standard User         | Standard User          | Standard User         |
+|                          | Traversal             | Traversal              | Traversal             |
+| Offline Cloud Placeholders| Zero Automatic       | Zero Automatic         | Skip Offline Files    |
+|                          | Hydration             | Hydration              |                       |
 +--------------------------+-----------------------+------------------------+-----------------------+
 ```
 
 ### 9.1 Pinned Versions & Licensing
-- Benchmark suites must execute against officially pinned, properly licensed 64-bit production releases: **WizTree 4.32 x64** and **JAM Software TreeSize Professional 9.8.x x64** (as documented in current comparison research [[2]](#ref-comparison)).
-- *TreeSize Free* is excluded from automated regression pipelines due to lack of command-line automation [[2]](#ref-comparison) and is used for informational GUI comparison only.
-- Test rigs must maintain valid commercial/supporter licenses where required by vendor terms. Exact binary SHA-256 hashes, build dates, and license types must be recorded in test manifests.
+- Authoritative release gates must execute against officially pinned, properly licensed 64-bit production releases documented in reviewed benchmark manifests.
+- The dated 2026-08-28 research snapshot evaluated WizTree 4.32 and JAM Software TreeSize Professional 9.8.x x64 as examples and source snapshot [[2]](#ref-comparison); future gates pin the current comparable production release at the time of manifest review.
+- *TreeSize Free* is excluded from automated regression pipelines due to lack of command-line automation [[2]](#ref-comparison) and is used for informational manual/GUI comparisons only.
+- Test rigs must maintain valid commercial/supporter licenses where required by vendor terms. Declared binary integrity digests (e.g., cryptographic hash), build dates, and license types must be recorded in test manifests.
 
 ### 9.2 Comparative Scan Performance Gates
-1. **Regime & Profile Equivalence**: PigTree is evaluated only against competitor configurations configured for equivalent work (identical hard link tracking, ADS observation, reparse handling, and output serialization to RAM-disk).
-2. **Standard User Traversal Parity**:
-   - On equivalent Standard User Traversal workloads (Regime B), PigTree's median end-to-end scan time must be **$\le 1.10\times$ (within 10%) of the fastest comparable tool**.
-   - On selected standard-traversal workloads, PigTree must **outperform TreeSize Professional median scan time by at least 10% ($\ge 10\%$ faster)** with decision-significant non-overlapping 95% bootstrap confidence intervals.
+1. **Fairness Settings & Work Equivalence**: PigTree is evaluated only against competitor configurations configured for equivalent work. Test manifests must record and match:
+   - Target path and scan scope.
+   - Analysis Profile and actual observed fields.
+   - Scope Coverage and Coverage Gaps.
+   - Privilege regime (Standard User Traversal vs. Elevated Direct-MFT).
+   - Operating system cache state (Warm vs. OS-Cold).
+   - Hard-link unique vs. referenced accounting.
+   - Alternate Data Stream (ADS) and stream metadata work.
+   - Reparse boundary traversal and cycle policies.
+   - Cloud hydration policy (zero automatic cloud hydration).
+   - Filters, exclusions, and pattern rules.
+   - Hidden and system file access permissions.
+   - Allocation semantics (Logical Size vs. physical Allocated Size).
+   - Microsoft Defender, power plan, and background service states.
+   - Output serialization work (e.g. writing to in-memory RAM disk) and execution mode (GUI vs. headless/CLI).
+   - *If exact equivalence cannot be configured in a competitor tool, no relative claim or pass/fail comparative gate is permitted; results may be documented for industry context only and labeled as Non-Comparable.*
+2. **Standard User Traversal Parity & Speedup Gates**:
+   - Evaluated using paired/repeated comparable runs and a nonparametric percentile bootstrap confidence interval for the time ratio.
+   - **Parity Gate**: On equivalent Standard User Traversal workloads (Regime B), PigTree passes the parity gate only when the upper 95% bootstrap confidence bound for the PigTree/competitor time ratio is **$\le 1.10$** (within 10% of the fastest comparable pinned tool).
+   - **TreeSize Speedup Gate**: On selected standard-traversal workloads, the gate and claim of being at least 10% faster than TreeSize Professional passes only when the upper 95% bootstrap confidence bound on the PigTree/TreeSize time ratio is **$\le 0.90$**.
 3. **Elevated Direct-MFT Scanning Gate**:
-   - Direct-MFT comparative gates apply **only if and when PigTree's direct-MFT adapter has passed all correctness, parser-safety, and release gates** defined in [ADR 0001](https://github.com/AFlyingP/PigTree/blob/decision/scanning-privilege-architecture/docs/adr/0001-scanning-and-privilege-architecture.md).
-   - If direct-MFT is enabled, PigTree median scan time must be within **$\le 1.10\times$ of WizTree 4.32**.
-4. **Incommensurable Work Policy**: If exact feature or accounting equivalence cannot be configured in a competitor tool, results may be published for transparent industry context but must be explicitly labeled as *Non-Comparable* and excluded from pass/fail gating.
+   - Direct-MFT comparative gates apply **only if and when PigTree's direct-MFT adapter has passed all correctness, parser-safety, and release gates** defined in [ADR 0001](https://github.com/AFlyingP/PigTree/blob/decision/scanning-privilege-architecture/docs/adr/0001-scanning-and-privilege-architecture.md) [[8]](#ref-adr0001).
+   - If direct-MFT is enabled, PigTree passes the direct-MFT comparative gate only when the upper 95% bootstrap confidence bound on the PigTree / current comparable pinned WizTree time ratio is **$\le 1.10$** on paired/matched comparable runs.
 
 ### 9.3 Public Claim Bounding & Expiration
 - PigTree will never make sweeping, unqualified claims such as "The Fastest Disk Space Analyzer on Windows".
-- Any public performance statement must explicitly declare:
-  - Exact PigTree version, competitor versions, and edition tiers.
+- Any public performance statement must explicitly declare and link:
+  - Frozen benchmark manifest and exact test execution date.
+  - Exact PigTree version, competitor versions, edition tiers, and declared binary integrity digests.
   - Reference hardware specifications, CPU model, RAM, storage media, and Windows build.
   - Target dataset composition, entry count, and directory depth.
-  - Active Scanning Profile (Core Accounting vs. Full Metadata) and Privilege Regime (Standard Traversal vs. Direct-MFT).
-  - Cache regime (Warm vs. Cold), Defender status, and statistical metric ($N$, median, p95, 95% CI).
-- **Claim Expiration**: All comparative performance claims automatically expire upon a new major/minor release of PigTree, an update to the compared competitor product, or a major Windows OS update. Expired claims must be re-verified against fresh benchmark manifests before re-publication.
+  - Active Scanning Profile (Core Accounting vs. Full Metadata) and Privilege Regime (Standard User Traversal vs. Elevated Direct-MFT).
+  - Cache regime (Warm vs. Cold), Defender status, and statistical metric ($N$, median, p95, 95% bootstrap CI).
+- **Claim Expiration & Retest**: Public comparative performance claims expire whenever either product version, default settings, or material configuration changes, or when the underlying Windows build, hardware platform, or measurement methodology materially changes, and at least with every release candidate (RC)—not only major/minor releases. Expired claims must be re-verified against fresh benchmark manifests before re-publication; unverified or outdated published claims must be marked as *Stale*.
 
 ---
 
@@ -477,13 +507,15 @@ Continuous performance governance ensures that code changes do not silently erod
 +-------------------+-----------------------+-----------------------------------+-------------------+
 ```
 
-### 10.1 Automated Gating Rules
-1. **Absolute Budget Breach**: Any commit or PR that causes an absolute numeric budget breach (e.g., peak memory > 1.5 GiB at 5M entries, or 5M scan > 75 s on SATA) is an **immediate hard blocker**.
-2. **Relative Regression on Controlled Hardware**:
-   - A measured increase of **$\ge 10\%$ in median or p95** execution time with non-overlapping 95% bootstrap confidence intervals blocks integration.
-   - An increase of **$5\% \text{ to } 10\%$** triggers an automated performance investigation.
-   - A **$\ge 10\%$ increase in peak memory footprint** or any frame stall violation (> 200 ms main thread stall or > 1% frames > 50 ms) blocks integration.
-3. **Baseline Governance**: Baseline benchmark manifests are version-controlled in the repository. Baselines cannot be automatically updated or "blessed" by CI scripts; any baseline modification requires an explicit peer-reviewed manifest commit detailing the hardware, rationale, and verified run artifacts.
+### 10.1 Release Governance & Automated Gating Rules
+1. **Authoritative Release Pipeline Evaluation**: Absolute and relative performance gating occurs when the authoritative dedicated bare-metal hardware pipeline evaluates candidate builds. Shared PR CI runs non-normative correctness and gross-regression smoke tests; PR CI does not directly generate 5M normative lab results.
+2. **Absolute Budget Breach on Authoritative Hardware**: Any candidate build evaluated on dedicated reference hardware that exceeds an absolute numeric budget (such as peak memory > 1.5 GiB at 5M entries, or 5M scan > 75 s on SATA), exhibits a memory scaling breach, violates UI frame stall limits (> 200 ms main thread stall or > 1% frames > 50 ms), or breaches cancellation latency budgets is an **immediate hard blocker**.
+3. **Relative Regression Gating on Controlled Hardware**:
+   - Evaluated using paired/matched comparable runs and a nonparametric percentile bootstrap CI for the time ratio or percentage change.
+   - Regression blocking occurs when the 95% bootstrap confidence interval for matched change demonstrates **$\ge 10\%$ degradation** in execution time.
+   - A measured point change of **$5\% \text{ to } 10\%$** triggers an automated performance investigation.
+   - A **$\ge 10\%$ increase in peak memory footprint** or any frame stall violation blocks integration.
+4. **Baseline Governance**: Baseline benchmark manifests are version-controlled in the repository. Baselines cannot be automatically updated or blessed by CI scripts; any baseline modification requires an explicit peer-reviewed manifest commit detailing the hardware, rationale, and verified run artifacts.
 
 ---
 
@@ -492,12 +524,23 @@ Continuous performance governance ensures that code changes do not silently erod
 Performance benchmarking must never compromise user data privacy or leak sensitive file system facts [[7]](#ref-context):
 
 1. **Synthetic & Public Datasets by Default**: Automated benchmark pipelines must operate exclusively on deterministic synthetic trees generated by reproducible script generators or public non-sensitive test corpus images.
-2. **Zero Automatic Telemetry Upload**: Benchmark runs, ETW traces, and performance logs must remain strictly local on the test machine. PigTree prohibits automated background transmission of performance traces.
-3. **Redaction Profile for Diagnostic Sharing**: If a performance defect or trace must be collected from a real-world user system, it must pass through an explicit local preview and Redaction Profile:
-   - File and folder names pseudonymized via one-way cryptographic hashing.
-   - User security identifiers (SIDs) and account strings replaced with synthetic principal tokens.
-   - Native error strings and paths scrubbed of user directory identifiers.
-   - Hardware serial numbers and network identifiers removed to prevent hardware fingerprinting.
+2. **Complete Reproducibility Package**: Published benchmark releases must include a full reproducibility package containing:
+   - Exact command lines, configuration flags, and profile settings.
+   - Deterministic dataset generator scripts and declared dataset integrity digest.
+   - Raw individual iteration measurements and derived summary statistics (median, p95, IQR, percentile bootstrap CIs).
+   - ETW traces, performance counters, and diagnostic event logs.
+   - Documented record of any statistical outlier investigations and trace-justified exclusions/replacements.
+   - Redacted environment metadata header (hardware, OS build, security states).
+   - Automation and analysis scripts where licensing permits (no proprietary competitor binaries are redistributed).
+3. **Zero Automatic Trace/Diagnostic Upload**: Benchmark runs, ETW traces, and performance logs must remain local on the test machine. PigTree has no telemetry and prohibits automated background transmission of performance traces or diagnostics.
+4. **Redaction Profile & Hardware Fingerprinting Warning**:
+   - *Warning*: Redacted traces and hardware performance counter profiles can still potentially fingerprint hardware.
+   - Collecting a diagnostic trace from a real-world system requires explicit user-initiated local export and user preview before sharing; automatic upload is prohibited.
+   - When a diagnostic trace is exported, it must pass through an explicit local Redaction Profile:
+     - File and folder names pseudonymized via one-way cryptographic hashing.
+     - User security identifiers (SIDs) and account strings replaced with synthetic principal tokens.
+     - Native error strings and paths scrubbed of user directory identifiers.
+     - Hardware serial numbers and network identifiers removed.
 
 ---
 
@@ -517,22 +560,22 @@ To maintain clean separation between product performance requirements and implem
 
 ## 13. Acceptance & Verification Checklist
 
-Before any implementation milestone is certified for release, it must be validated against this checklist:
+Before any implementation milestone is certified for release, it must be validated against the canonical performance budgets and governance criteria defined in this document:
 
-- [ ] **Universal Scale Floor**: Successfully scans, indexes, and presents a 5,000,000 Directory Entry target without crash or data loss.
-- [ ] **Standard Traversal Budgets**: Meets all p95 scan durations (<= 12 s at 1M SATA, <= 6 s at 1M NVMe, <= 75 s at 5M SATA, <= 35 s at 5M NVMe).
-- [ ] **Initial Interactive Availability**: Surfaces root and immediate children (p95 <= 1.0 s) with first status within <= 250 ms.
-- [ ] **Memory Scaling Invariant**: Base idle <= 256 MiB; incremental slope <= 256 bytes/entry; peak Private Bytes <= 512 MiB (1M) and <= 1.5 GiB (5M).
-- [ ] **Snapshot Reopen**: Loads and query-indexes saved 5M snapshot within p95 <= 3.0 s (NVMe) / <= 6.0 s (SATA).
-- [ ] **Query & Filter Responsiveness**: Primary indexed page <= 100 ms p95; standard filters and Insights <= 200 ms p95.
-- [ ] **Export Throughput**: Emits first record <= 250 ms p95; sustains median >= 100,000 rows/s flat streaming export with <= 128 MiB buffer memory.
-- [ ] **UI Frame & Responsiveness**: Frame duration p95 <= 16.7 ms, p99 <= 33.3 ms, < 1% frames > 50 ms; zero main thread stalls > 200 ms.
-- [ ] **Candidate Discovery & Stream Verification**: Complete 5M duplicate candidates <= 5.0 s p95; stream verification achieves >= 70% drive read bandwidth; zero cloud hydration.
-- [ ] **Action Plan & Preflight Safety**: Plan preview <= 500 ms p95 (1k ops); routine preflight step median <= 100 ms; zero safety deadline bypasses.
-- [ ] **Cancellation Latency**: General task cancellation acknowledged <= 100 ms; terminal settlement p95 <= 1.0 s (hard ceiling 2.0 s).
-- [ ] **Competitor Scan Parity**: Demonstrates median scan time <= 1.10x fastest comparable tool and >= 10% faster than TreeSize Pro on standard traversal.
-- [ ] **8-Hour Soak Test**: Passes continuous 8-hour mixed cycle with <= 5.0% retained memory growth post steady-state.
-- [ ] **Statistical & Privacy Compliance**: All reported benchmark results backed by $N \ge 10$ iterations, raw counters, bootstrap 95% CIs, and zero telemetry leakage.
+- [ ] **Universal Scale Floor**: Successfully scans, indexes, and presents a 5,000,000 Directory Entry target without crash or data loss (Section 2, 7.1, 7.2).
+- [ ] **Standard Traversal Budgets**: Meets all canonical p95 scan durations, throughput limits, and finalization bounds across Tier 1 SATA, Tier 2 NVMe, and Tier 3 HDD (Section 7.1).
+- [ ] **Initial Interactive Availability & Progress**: Surfaces root and immediate first-level children (p95 <= 1.0 s on SSD, <= 2.0 s on HDD), first status <= 250 ms p95, heartbeat gap <= 500 ms, and GUI materialization delay <= 100 ms p95 (Section 7.1).
+- [ ] **Memory Scaling Invariants**: Base idle <= 256 MiB; incremental slope <= 256 bytes/entry; peak Private Bytes <= 512 MiB (1M) and <= 1.5 GiB (5M release floor) with graceful degradation under memory pressure (Section 7.2).
+- [ ] **Historical Snapshot Reopen**: Loads and query-indexes saved snapshots within Section 7.3 budgets (p95 <= 3.0 s on NVMe, <= 6.0 s on SATA for 5M entries) with non-blocking background view warming.
+- [ ] **Query, Filter & Insights Responsiveness**: Primary indexed page <= 100 ms p95; standard filtering, sorting, and domain Insights <= 200 ms p95; complex uncached queries <= 500 ms p95 with deterministic results (Section 7.4).
+- [ ] **Export Throughput & Memory**: Emits first record <= 250 ms p95; sustains median >= 100,000 rows/s flat streaming export with <= 128 MiB buffer memory; export cancellation <= 500 ms p95 (Section 7.5).
+- [ ] **UI Frame Timing & Accessibility**: Frame duration p95 <= 16.7 ms (>= 60 FPS), p99 <= 33.3 ms (>= 30 FPS), < 1% frames > 50 ms; zero main thread stalls > 200 ms; initial Insights render <= 300 ms p95; accessible workspace first frame <= 500 ms p95; semantic updates <= 200 ms p95; screen reader feeds <= 500 ms (Section 7.6).
+- [ ] **Duplicate Candidate Discovery & Content Verification**: Complete 5M candidate grouping <= 5.0 s p95 with <= 512 MiB memory; sequential stream verification achieves >= 70% SSD / >= 60% HDD calibrated bandwidth; zero automatic cloud hydration (explicit consented hydration measured separately); verification cancellation p95 <= 1.0 s (Section 7.7).
+- [ ] **Action Plan Preview, Preflight & Nonmutating Validation**: Preview <= 500 ms p95 (1k ops); nonmutating validation <= 2.0 s (warm metadata) / <= 5.0 s (live reads); routine preflight step median <= 100 ms with zero safety check skips; general cancellation ack <= 100 ms and settlement p95 <= 1.0 s (Section 7.8).
+- [ ] **Concurrent Execution & Background Impact**: Balanced mode query regression <= 25%; low-impact background scan interactive UI regression <= 10%, average CPU <= 25%, bounded low-priority I/O, and throttling disclosed in Operation Events / Diagnostics (Section 7.9).
+- [ ] **Long-Run Soak Stability**: Passes continuous 8-hour mixed soak cycle with retained memory growth <= 5.0% post steady-state, zero handle/thread leaks, and interactive/cancellation budgets passing (Section 7.10).
+- [ ] **Competitor Parity & Speedup Gates**: Demonstrates matched-run parity (upper 95% bootstrap bound <= 1.10) against fastest comparable pinned tool and >= 10% faster than TreeSize Pro (upper 95% bootstrap bound <= 0.90) on standard traversal under matched fairness settings (Section 9.2).
+- [ ] **Authoritative Governance & Statistical Rigor**: Authoritative dedicated-hardware pipeline evaluation, $N \ge 10$ iterations, percentile bootstrap 95% CIs, trace-justified outlier handling, and complete local reproducibility package with zero background data transmission (Sections 8, 10, 11).
 
 ---
 
@@ -545,3 +588,4 @@ Before any implementation milestone is certified for release, it must be validat
 - <a id="ref-workflows"></a>**[5] PigTree Team.** (2025). *Everyday Disk Analysis Workflows and Pain Points*. `docs/research/everyday-disk-analysis-workflows-and-pain-points.md`.
 - <a id="ref-ui"></a>**[6] PigTree Team.** (2025). *Windows UI Technologies Evaluation*. `docs/research/windows-ui-technologies.md`.
 - <a id="ref-context"></a>**[7] PigTree Team.** (2026). *PigTree Information Architecture and Domain Model*. `CONTEXT.md`.
+- <a id="ref-adr0001"></a>**[8] PigTree Team.** (2026). *Scanning Subsystem and Privilege Architecture*. [ADR 0001](https://github.com/AFlyingP/PigTree/blob/decision/scanning-privilege-architecture/docs/adr/0001-scanning-and-privilege-architecture.md).
