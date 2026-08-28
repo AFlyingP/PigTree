@@ -44,8 +44,8 @@ export const MOCK_VOLUMES = [
     capacityBytes: 1024 * 1024 * 1024 * 1024, // 1 TB
     freeBytes: 450 * 1024 * 1024 * 1024,      // 450 GB
     usedBytes: 574 * 1024 * 1024 * 1024,      // 574 GB
-    accountedUniqueBytes: 570 * 1024 * 1024 * 1024,
-    unattributedUsedBytes: 4 * 1024 * 1024 * 1024,
+    accountedUniqueBytes: 570 * 1024 * 1024 * 1024, // 570 GB
+    unattributedUsedBytes: 4 * 1024 * 1024 * 1024,  // 4 GB
     overAccountedBytes: 0,
     coverage: 'complete',
     runOutcome: 'finished',
@@ -61,7 +61,7 @@ export const MOCK_VOLUMES = [
 export const HISTORICAL_SNAPSHOTS = [
   {
     id: 'snap_c_prev_month',
-    name: 'C:\ Snapshot (14 days ago - March 27, 2025)',
+    name: 'C:\\ Snapshot (14 days ago - March 27, 2025)',
     targetType: 'volume',
     targetPath: 'C:\\',
     volumeId: 'vol_c',
@@ -69,6 +69,11 @@ export const HISTORICAL_SNAPSHOTS = [
     runOutcome: 'finished',
     coverage: 'partial',
     profileName: 'Standard',
+    capacityBytes: 512 * 1024 * 1024 * 1024,
+    freeBytes: 134.4 * 1024 * 1024 * 1024,
+    usedBytes: 377.6 * 1024 * 1024 * 1024,
+    accountedUniqueBytes: 353.6 * 1024 * 1024 * 1024,
+    unattributedUsedBytes: 24.0 * 1024 * 1024 * 1024,
     note: 'Historical snapshot: facts observed during the observation interval, not live system state.'
   },
   {
@@ -81,6 +86,9 @@ export const HISTORICAL_SNAPSHOTS = [
     runOutcome: 'finished',
     coverage: 'complete',
     profileName: 'Standard',
+    directoryAllocatedBytes: 18.2 * 1024 * 1024 * 1024,
+    directoryLogicalBytes: 18.0 * 1024 * 1024 * 1024,
+    entryCount: 85,
     note: 'Historical directory snapshot; external reference uncertainties apply.'
   }
 ];
@@ -203,7 +211,7 @@ export const MOCK_OBJECTS = {
   }
 };
 
-// Tree nodes representing Directory Entries in C:\
+// Tree nodes representing Directory Entries in C:// Fully reconciled: every directory's children sum up exactly to parent declared totals
 export const MOCK_TREE_ROOT = {
   id: 'node_root',
   name: 'C:\\',
@@ -212,7 +220,7 @@ export const MOCK_TREE_ROOT = {
   objectId: 'obj_root_c',
   entryCount: 48210,
   uniqueObjectCount: 44102,
-  referencedAllocatedBytes: 382.4 * 1024 * 1024 * 1024, // Notice referenced is larger than unique due to hardlinks!
+  referencedAllocatedBytes: 382.4 * 1024 * 1024 * 1024,
   uniqueAllocatedBytes: 368.0 * 1024 * 1024 * 1024,
   referencedLogicalBytes: 389.1 * 1024 * 1024 * 1024,
   uniqueLogicalBytes: 375.0 * 1024 * 1024 * 1024,
@@ -311,6 +319,24 @@ export const MOCK_TREE_ROOT = {
               modifiedTime: '2025-04-05T12:00:00Z',
               category: 'Application Executable',
               cleanupSafe: 'danger_game_asset'
+            },
+            {
+              id: 'node_starfall_remainder',
+              name: '[8,397 other game files & audio assets]',
+              path: 'C:\\Games\\Starfall\\ [Mock Aggregate Summary]',
+              kind: 'summary_remainder',
+              isSummaryRemainder: true,
+              entryCount: 8397,
+              uniqueObjectCount: 8397,
+              referencedAllocatedBytes: (64.6 - 38.2 - 18.4) * 1024 * 1024 * 1024 - 45 * 1024 * 1024,
+              uniqueAllocatedBytes: (64.6 - 38.2 - 18.4) * 1024 * 1024 * 1024 - 45 * 1024 * 1024,
+              referencedLogicalBytes: (64.5 - 38.2 - 18.4) * 1024 * 1024 * 1024 - 45 * 1024 * 1024,
+              uniqueLogicalBytes: (64.5 - 38.2 - 18.4) * 1024 * 1024 * 1024 - 45 * 1024 * 1024,
+              observationStatus: 'observed',
+              coverage: 'complete',
+              modifiedTime: '2025-04-05T12:00:00Z',
+              category: 'Mock Aggregate Summary',
+              cleanupSafe: 'summary_non_selectable'
             }
           ]
         },
@@ -342,7 +368,7 @@ export const MOCK_TREE_ROOT = {
       uniqueObjectCount: 16540,
       referencedAllocatedBytes: 107.9 * 1024 * 1024 * 1024,
       uniqueAllocatedBytes: 107.9 * 1024 * 1024 * 1024,
-      referencedLogicalBytes: 112.5 * 1024 * 1024 * 1024, // Higher logical due to OneDrive placeholder!
+      referencedLogicalBytes: 112.5 * 1024 * 1024 * 1024,
       uniqueLogicalBytes: 112.5 * 1024 * 1024 * 1024,
       observationStatus: 'observed',
       coverage: 'complete',
@@ -473,6 +499,24 @@ export const MOCK_TREE_ROOT = {
                   modifiedTime: '2025-04-05T09:00:00Z',
                   category: 'Installer Package',
                   cleanupSafe: 'user_reviewable'
+                },
+                {
+                  id: 'node_alex_downloads_remainder',
+                  name: '[119 other downloaded setup tools & archives]',
+                  path: 'C:\\Users\\Alex\\Downloads\\ [Mock Aggregate Summary]',
+                  kind: 'summary_remainder',
+                  isSummaryRemainder: true,
+                  entryCount: 119,
+                  uniqueObjectCount: 119,
+                  referencedAllocatedBytes: (28.9 - 6.2 - 5.8 - 8.4 - 4.1) * 1024 * 1024 * 1024 - 32 * 1024 * 1024,
+                  uniqueAllocatedBytes: (28.9 - 6.2 - 5.8 - 8.4 - 4.1) * 1024 * 1024 * 1024 - 32 * 1024 * 1024,
+                  referencedLogicalBytes: (28.6 - 6.2 - 5.8 - 8.4 - 4.1) * 1024 * 1024 * 1024 - 32 * 1024 * 1024,
+                  uniqueLogicalBytes: (28.6 - 6.2 - 5.8 - 8.4 - 4.1) * 1024 * 1024 * 1024 - 32 * 1024 * 1024,
+                  observationStatus: 'observed',
+                  coverage: 'complete',
+                  modifiedTime: '2025-04-01T12:00:00Z',
+                  category: 'Mock Aggregate Summary',
+                  cleanupSafe: 'summary_non_selectable'
                 }
               ]
             },
@@ -485,7 +529,7 @@ export const MOCK_TREE_ROOT = {
               uniqueObjectCount: 450,
               referencedAllocatedBytes: 0.1 * 1024 * 1024 * 1024,
               uniqueAllocatedBytes: 0.1 * 1024 * 1024 * 1024,
-              referencedLogicalBytes: 4.9 * 1024 * 1024 * 1024, // Demonstrates cloud placeholder!
+              referencedLogicalBytes: 4.9 * 1024 * 1024 * 1024,
               uniqueLogicalBytes: 4.9 * 1024 * 1024 * 1024,
               observationStatus: 'observed',
               coverage: 'complete',
@@ -500,7 +544,7 @@ export const MOCK_TREE_ROOT = {
                   objectId: 'obj_onedrive_zip',
                   entryCount: 1,
                   uniqueObjectCount: 1,
-                  referencedAllocatedBytes: 0, // 0 bytes allocated on disk!
+                  referencedAllocatedBytes: 0,
                   uniqueAllocatedBytes: 0,
                   referencedLogicalBytes: 4.8 * 1024 * 1024 * 1024,
                   uniqueLogicalBytes: 4.8 * 1024 * 1024 * 1024,
@@ -529,6 +573,24 @@ export const MOCK_TREE_ROOT = {
                   modifiedTime: '2025-04-02T11:20:00Z',
                   category: 'Document',
                   cleanupSafe: 'user_reviewable'
+                },
+                {
+                  id: 'node_alex_onedrive_remainder',
+                  name: '[448 synced cloud documents & spreadsheets]',
+                  path: 'C:\\Users\\Alex\\OneDrive\\ [Mock Aggregate Summary]',
+                  kind: 'summary_remainder',
+                  isSummaryRemainder: true,
+                  entryCount: 448,
+                  uniqueObjectCount: 448,
+                  referencedAllocatedBytes: 0.1 * 1024 * 1024 * 1024 - 12.5 * 1024 * 1024,
+                  uniqueAllocatedBytes: 0.1 * 1024 * 1024 * 1024 - 12.5 * 1024 * 1024,
+                  referencedLogicalBytes: (4.9 - 4.8) * 1024 * 1024 * 1024 - 12.4 * 1024 * 1024,
+                  uniqueLogicalBytes: (4.9 - 4.8) * 1024 * 1024 * 1024 - 12.4 * 1024 * 1024,
+                  observationStatus: 'observed',
+                  coverage: 'complete',
+                  modifiedTime: '2025-04-02T11:20:00Z',
+                  category: 'Mock Aggregate Summary',
+                  cleanupSafe: 'summary_non_selectable'
                 }
               ]
             },
@@ -565,6 +627,24 @@ export const MOCK_TREE_ROOT = {
                   modifiedTime: '2025-04-10T14:10:00Z',
                   category: 'Temporary Files',
                   cleanupSafe: 'system_temp'
+                },
+                {
+                  id: 'node_alex_appdata_remainder',
+                  name: '[6,100 other cache & local settings entries]',
+                  path: 'C:\\Users\\Alex\\AppData\\ [Mock Aggregate Summary]',
+                  kind: 'summary_remainder',
+                  isSummaryRemainder: true,
+                  entryCount: 6100,
+                  uniqueObjectCount: 6100,
+                  referencedAllocatedBytes: (24.8 - 8.2) * 1024 * 1024 * 1024,
+                  uniqueAllocatedBytes: (24.8 - 8.2) * 1024 * 1024 * 1024,
+                  referencedLogicalBytes: (24.5 - 8.2) * 1024 * 1024 * 1024,
+                  uniqueLogicalBytes: (24.5 - 8.2) * 1024 * 1024 * 1024,
+                  observationStatus: 'observed',
+                  coverage: 'complete',
+                  modifiedTime: '2025-04-09T10:00:00Z',
+                  category: 'Mock Aggregate Summary',
+                  cleanupSafe: 'summary_non_selectable'
                 }
               ]
             },
@@ -600,10 +680,64 @@ export const MOCK_TREE_ROOT = {
                   modifiedTime: '2025-04-06T15:00:00Z',
                   category: 'Machine Learning Models & Weights',
                   cleanupSafe: 'user_reviewable'
+                },
+                {
+                  id: 'node_alex_projects_remainder',
+                  name: '[5,650 other code repo & node_modules files]',
+                  path: 'C:\\Users\\Alex\\Projects\\ [Mock Aggregate Summary]',
+                  kind: 'summary_remainder',
+                  isSummaryRemainder: true,
+                  entryCount: 5650,
+                  uniqueObjectCount: 5650,
+                  referencedAllocatedBytes: (36.5 - 28.6) * 1024 * 1024 * 1024,
+                  uniqueAllocatedBytes: (36.5 - 28.6) * 1024 * 1024 * 1024,
+                  referencedLogicalBytes: (36.2 - 28.5) * 1024 * 1024 * 1024,
+                  uniqueLogicalBytes: (36.2 - 28.5) * 1024 * 1024 * 1024,
+                  observationStatus: 'observed',
+                  coverage: 'complete',
+                  modifiedTime: '2025-04-08T10:00:00Z',
+                  category: 'Mock Aggregate Summary',
+                  cleanupSafe: 'summary_non_selectable'
                 }
               ]
+            },
+            {
+              id: 'node_alex_profile_remainder',
+              name: '[26 other profile folders (Documents, Videos, Desktop)]',
+              path: 'C:\\Users\\Alex\\ [Mock Aggregate Summary]',
+              kind: 'summary_remainder',
+              isSummaryRemainder: true,
+              entryCount: 26,
+              uniqueObjectCount: 26,
+              referencedAllocatedBytes: (106.8 - 28.9 - 0.1 - 24.8 - 36.5) * 1024 * 1024 * 1024,
+              uniqueAllocatedBytes: (106.8 - 28.9 - 0.1 - 24.8 - 36.5) * 1024 * 1024 * 1024,
+              referencedLogicalBytes: (111.4 - 28.6 - 4.9 - 24.5 - 36.2) * 1024 * 1024 * 1024,
+              uniqueLogicalBytes: (111.4 - 28.6 - 4.9 - 24.5 - 36.2) * 1024 * 1024 * 1024,
+              observationStatus: 'observed',
+              coverage: 'complete',
+              modifiedTime: '2025-04-01T12:00:00Z',
+              category: 'Mock Aggregate Summary',
+              cleanupSafe: 'summary_non_selectable'
             }
           ]
+        },
+        {
+          id: 'node_users_remainder',
+          name: '[640 items in Public & Default user profiles]',
+          path: 'C:\\Users\\ [Mock Aggregate Summary]',
+          kind: 'summary_remainder',
+          isSummaryRemainder: true,
+          entryCount: 640,
+          uniqueObjectCount: 640,
+          referencedAllocatedBytes: (107.9 - 106.8) * 1024 * 1024 * 1024,
+          uniqueAllocatedBytes: (107.9 - 106.8) * 1024 * 1024 * 1024,
+          referencedLogicalBytes: (112.5 - 111.4) * 1024 * 1024 * 1024,
+          uniqueLogicalBytes: (112.5 - 111.4) * 1024 * 1024 * 1024,
+          observationStatus: 'observed',
+          coverage: 'complete',
+          modifiedTime: '2025-03-15T09:00:00Z',
+          category: 'Mock Aggregate Summary',
+          cleanupSafe: 'summary_non_selectable'
         }
       ]
     },
@@ -613,9 +747,9 @@ export const MOCK_TREE_ROOT = {
       path: 'C:\\Windows',
       kind: 'directory',
       entryCount: 11420,
-      uniqueObjectCount: 8850, // Fewer unique objects than entries due to WinSxS hardlinks!
-      referencedAllocatedBytes: 48.2 * 1024 * 1024 * 1024, // Sum of all links
-      uniqueAllocatedBytes: 42.1 * 1024 * 1024 * 1024,    // Distinct object allocation
+      uniqueObjectCount: 8850,
+      referencedAllocatedBytes: 48.2 * 1024 * 1024 * 1024,
+      uniqueAllocatedBytes: 42.1 * 1024 * 1024 * 1024,
       referencedLogicalBytes: 49.5 * 1024 * 1024 * 1024,
       uniqueLogicalBytes: 43.0 * 1024 * 1024 * 1024,
       observationStatus: 'observed',
@@ -629,10 +763,10 @@ export const MOCK_TREE_ROOT = {
           name: 'WinSxS',
           path: 'C:\\Windows\\WinSxS',
           kind: 'directory',
-          entryCount: 4800,
-          uniqueObjectCount: 2230,
+          entryCount: 4500,
+          uniqueObjectCount: 1930,
           referencedAllocatedBytes: 18.5 * 1024 * 1024 * 1024,
-          uniqueAllocatedBytes: 12.4 * 1024 * 1024 * 1024, // Hardlinked with System32
+          uniqueAllocatedBytes: 12.4 * 1024 * 1024 * 1024,
           referencedLogicalBytes: 19.0 * 1024 * 1024 * 1024,
           uniqueLogicalBytes: 12.8 * 1024 * 1024 * 1024,
           observationStatus: 'observed',
@@ -646,7 +780,7 @@ export const MOCK_TREE_ROOT = {
               name: 'amd64_microsoft-windows-shell32_...\\shell32.dll',
               path: 'C:\\Windows\\WinSxS\\amd64_microsoft-windows-shell32_6.3.9600.17415\\shell32.dll',
               kind: 'file',
-              objectId: 'obj_shell32', // Shared object with System32\shell32.dll!
+              objectId: 'obj_shell32',
               entryCount: 1,
               uniqueObjectCount: 1,
               referencedAllocatedBytes: 14.2 * 1024 * 1024,
@@ -659,6 +793,24 @@ export const MOCK_TREE_ROOT = {
               modifiedTime: '2025-03-20T12:00:00Z',
               category: 'Hardlinked System DLL (WinSxS Component Store)',
               cleanupSafe: 'protected_system'
+            },
+            {
+              id: 'node_winsxs_remainder',
+              name: '[4,499 other WinSxS manifest & component packages]',
+              path: 'C:\\Windows\\WinSxS\\ [Mock Aggregate Summary]',
+              kind: 'summary_remainder',
+              isSummaryRemainder: true,
+              entryCount: 4499,
+              uniqueObjectCount: 1929,
+              referencedAllocatedBytes: 18.5 * 1024 * 1024 * 1024 - 14.2 * 1024 * 1024,
+              uniqueAllocatedBytes: 12.4 * 1024 * 1024 * 1024 - 14.2 * 1024 * 1024,
+              referencedLogicalBytes: 19.0 * 1024 * 1024 * 1024 - 14.2 * 1024 * 1024,
+              uniqueLogicalBytes: 12.8 * 1024 * 1024 * 1024 - 14.2 * 1024 * 1024,
+              observationStatus: 'observed',
+              coverage: 'complete',
+              modifiedTime: '2025-04-09T22:00:00Z',
+              category: 'Mock Aggregate Summary',
+              cleanupSafe: 'summary_non_selectable'
             }
           ]
         },
@@ -667,8 +819,8 @@ export const MOCK_TREE_ROOT = {
           name: 'System32',
           path: 'C:\\Windows\\System32',
           kind: 'directory',
-          entryCount: 5200,
-          uniqueObjectCount: 5200,
+          entryCount: 5000,
+          uniqueObjectCount: 5000,
           referencedAllocatedBytes: 21.0 * 1024 * 1024 * 1024,
           uniqueAllocatedBytes: 21.0 * 1024 * 1024 * 1024,
           referencedLogicalBytes: 21.2 * 1024 * 1024 * 1024,
@@ -684,7 +836,7 @@ export const MOCK_TREE_ROOT = {
               name: 'shell32.dll',
               path: 'C:\\Windows\\System32\\shell32.dll',
               kind: 'file',
-              objectId: 'obj_shell32', // Shared object with WinSxS!
+              objectId: 'obj_shell32',
               entryCount: 1,
               uniqueObjectCount: 1,
               referencedAllocatedBytes: 14.2 * 1024 * 1024,
@@ -716,6 +868,24 @@ export const MOCK_TREE_ROOT = {
               modifiedTime: '2025-03-20T12:00:00Z',
               category: 'Windows NT OS Kernel Executable',
               cleanupSafe: 'protected_system'
+            },
+            {
+              id: 'node_sys32_remainder',
+              name: '[4,998 other system drivers, DLLs, and executables]',
+              path: 'C:\\Windows\\System32\\ [Mock Aggregate Summary]',
+              kind: 'summary_remainder',
+              isSummaryRemainder: true,
+              entryCount: 4998,
+              uniqueObjectCount: 4998,
+              referencedAllocatedBytes: 21.0 * 1024 * 1024 * 1024 - 26.0 * 1024 * 1024,
+              uniqueAllocatedBytes: 21.0 * 1024 * 1024 * 1024 - 26.0 * 1024 * 1024,
+              referencedLogicalBytes: 21.2 * 1024 * 1024 * 1024 - 26.0 * 1024 * 1024,
+              uniqueLogicalBytes: 21.2 * 1024 * 1024 * 1024 - 26.0 * 1024 * 1024,
+              observationStatus: 'observed',
+              coverage: 'complete',
+              modifiedTime: '2025-04-10T04:15:00Z',
+              category: 'Mock Aggregate Summary',
+              cleanupSafe: 'summary_non_selectable'
             }
           ]
         },
@@ -724,8 +894,8 @@ export const MOCK_TREE_ROOT = {
           name: 'SoftwareDistribution',
           path: 'C:\\Windows\\SoftwareDistribution',
           kind: 'directory',
-          entryCount: 1420,
-          uniqueObjectCount: 1420,
+          entryCount: 1400,
+          uniqueObjectCount: 1400,
           referencedAllocatedBytes: 3.4 * 1024 * 1024 * 1024,
           uniqueAllocatedBytes: 3.4 * 1024 * 1024 * 1024,
           referencedLogicalBytes: 3.4 * 1024 * 1024 * 1024,
@@ -735,6 +905,24 @@ export const MOCK_TREE_ROOT = {
           modifiedTime: '2025-04-09T14:00:00Z',
           category: 'Windows Update Cache',
           cleanupSafe: 'native_disk_cleanup'
+        },
+        {
+          id: 'node_windows_remainder',
+          name: '[520 other Windows system directories (SysWOW64, Microsoft.NET)]',
+          path: 'C:\\Windows\\ [Mock Aggregate Summary]',
+          kind: 'summary_remainder',
+          isSummaryRemainder: true,
+          entryCount: 520,
+          uniqueObjectCount: 520,
+          referencedAllocatedBytes: (48.2 - 18.5 - 21.0 - 3.4) * 1024 * 1024 * 1024,
+          uniqueAllocatedBytes: (42.1 - 12.4 - 21.0 - 3.4) * 1024 * 1024 * 1024,
+          referencedLogicalBytes: (49.5 - 19.0 - 21.2 - 3.4) * 1024 * 1024 * 1024,
+          uniqueLogicalBytes: (43.0 - 12.8 - 21.2 - 3.4) * 1024 * 1024 * 1024,
+          observationStatus: 'observed',
+          coverage: 'complete',
+          modifiedTime: '2025-04-09T14:00:00Z',
+          category: 'Mock Aggregate Summary',
+          cleanupSafe: 'summary_non_selectable'
         }
       ]
     },
@@ -769,7 +957,7 @@ export const MOCK_TREE_ROOT = {
           observationStatus: 'observed',
           coverage: 'complete',
           modifiedTime: '2025-04-01T12:00:00Z',
-          category: 'Creative Suite Suite Software',
+          category: 'Creative Suite Software',
           cleanupSafe: 'native_uninstall'
         },
         {
@@ -788,6 +976,24 @@ export const MOCK_TREE_ROOT = {
           modifiedTime: '2025-04-02T10:00:00Z',
           category: 'Container Virtualization Tools',
           cleanupSafe: 'native_uninstall'
+        },
+        {
+          id: 'node_programfiles_remainder',
+          name: '[1,200 other application packages & utilities]',
+          path: 'C:\\Program Files\\ [Mock Aggregate Summary]',
+          kind: 'summary_remainder',
+          isSummaryRemainder: true,
+          entryCount: 1200,
+          uniqueObjectCount: 1200,
+          referencedAllocatedBytes: (45.8 - 18.6 - 14.4) * 1024 * 1024 * 1024,
+          uniqueAllocatedBytes: (45.8 - 18.6 - 14.4) * 1024 * 1024 * 1024,
+          referencedLogicalBytes: (45.2 - 18.5 - 14.2) * 1024 * 1024 * 1024,
+          uniqueLogicalBytes: (45.2 - 18.5 - 14.2) * 1024 * 1024 * 1024,
+          observationStatus: 'observed',
+          coverage: 'complete',
+          modifiedTime: '2025-04-01T12:00:00Z',
+          category: 'Mock Aggregate Summary',
+          cleanupSafe: 'summary_non_selectable'
         }
       ]
     },
@@ -847,11 +1053,326 @@ export const MOCK_TREE_ROOT = {
       modifiedTime: '2025-04-10T14:00:00Z',
       category: 'System Storage (Inaccessible)',
       cleanupSafe: 'system_inaccessible'
+    },
+    {
+      id: 'node_root_remainder',
+      name: '[3,198 other top-level files & folders]',
+      path: 'C:\\ [Mock Aggregate Summary]',
+      kind: 'summary_remainder',
+      isSummaryRemainder: true,
+      entryCount: 3198,
+      uniqueObjectCount: 3198,
+      referencedAllocatedBytes: (382.4 - 68.6 - 107.9 - 48.2 - 45.8 - 16.0 - 12.8) * 1024 * 1024 * 1024,
+      uniqueAllocatedBytes: (368.0 - 68.6 - 107.9 - 42.1 - 45.8 - 16.0 - 12.8) * 1024 * 1024 * 1024,
+      referencedLogicalBytes: (389.1 - 68.4 - 112.5 - 49.5 - 45.2 - 16.0 - 12.8) * 1024 * 1024 * 1024,
+      uniqueLogicalBytes: (375.0 - 68.4 - 112.5 - 43.0 - 45.2 - 16.0 - 12.8) * 1024 * 1024 * 1024,
+      observationStatus: 'observed',
+      coverage: 'complete',
+      modifiedTime: '2025-04-09T08:00:00Z',
+      category: 'Mock Aggregate Summary',
+      cleanupSafe: 'summary_non_selectable'
     }
   ]
 };
 
-// Reconciliation item for volume scope (NEVER an ordinary directory)
+// Tree node representing Volume D: (ReFS Data Volume)
+export const MOCK_TREE_ROOT_D = {
+  id: 'node_root_d',
+  name: 'D:\\',
+  path: 'D:\\',
+  kind: 'directory',
+  entryCount: 20950,
+  uniqueObjectCount: 20950,
+  referencedAllocatedBytes: 570.0 * 1024 * 1024 * 1024,
+  uniqueAllocatedBytes: 570.0 * 1024 * 1024 * 1024,
+  referencedLogicalBytes: 568.0 * 1024 * 1024 * 1024,
+  uniqueLogicalBytes: 568.0 * 1024 * 1024 * 1024,
+  observationStatus: 'observed',
+  coverage: 'complete',
+  coverageGapsCount: 0,
+  modifiedTime: '2025-04-09T10:00:00Z',
+  category: 'Root Directory (ReFS)',
+  children: [
+    {
+      id: 'node_d_backups',
+      name: 'Backups',
+      path: 'D:\\Backups',
+      kind: 'directory',
+      entryCount: 12000,
+      uniqueObjectCount: 12000,
+      referencedAllocatedBytes: 320.0 * 1024 * 1024 * 1024,
+      uniqueAllocatedBytes: 320.0 * 1024 * 1024 * 1024,
+      referencedLogicalBytes: 319.0 * 1024 * 1024 * 1024,
+      uniqueLogicalBytes: 319.0 * 1024 * 1024 * 1024,
+      observationStatus: 'observed',
+      coverage: 'complete',
+      modifiedTime: '2025-04-08T03:00:00Z',
+      category: 'System & DB Backups',
+      cleanupSafe: 'user_reviewable',
+      children: [
+        {
+          id: 'node_d_backup_vm',
+          name: 'VM_Snapshot_2025.vhdx',
+          path: 'D:\\Backups\\VM_Snapshot_2025.vhdx',
+          kind: 'file',
+          entryCount: 1,
+          uniqueObjectCount: 1,
+          referencedAllocatedBytes: 180.0 * 1024 * 1024 * 1024,
+          uniqueAllocatedBytes: 180.0 * 1024 * 1024 * 1024,
+          referencedLogicalBytes: 180.0 * 1024 * 1024 * 1024,
+          uniqueLogicalBytes: 180.0 * 1024 * 1024 * 1024,
+          observationStatus: 'observed',
+          coverage: 'complete',
+          fileExt: '.vhdx',
+          modifiedTime: '2025-03-28T02:00:00Z',
+          category: 'Virtual Hard Disk Backup',
+          cleanupSafe: 'user_reviewable'
+        },
+        {
+          id: 'node_d_backup_db',
+          name: 'Database_Dump.sql.zst',
+          path: 'D:\\Backups\\Database_Dump.sql.zst',
+          kind: 'file',
+          entryCount: 1,
+          uniqueObjectCount: 1,
+          referencedAllocatedBytes: 85.0 * 1024 * 1024 * 1024,
+          uniqueAllocatedBytes: 85.0 * 1024 * 1024 * 1024,
+          referencedLogicalBytes: 85.0 * 1024 * 1024 * 1024,
+          uniqueLogicalBytes: 85.0 * 1024 * 1024 * 1024,
+          observationStatus: 'observed',
+          coverage: 'complete',
+          fileExt: '.zst',
+          modifiedTime: '2025-04-01T04:00:00Z',
+          category: 'Compressed Database Archive',
+          cleanupSafe: 'user_reviewable'
+        },
+        {
+          id: 'node_d_backups_remainder',
+          name: '[11,998 other backup archives & logs]',
+          path: 'D:\\Backups\\ [Mock Aggregate Summary]',
+          kind: 'summary_remainder',
+          isSummaryRemainder: true,
+          entryCount: 11998,
+          uniqueObjectCount: 11998,
+          referencedAllocatedBytes: (320.0 - 180.0 - 85.0) * 1024 * 1024 * 1024,
+          uniqueAllocatedBytes: (320.0 - 180.0 - 85.0) * 1024 * 1024 * 1024,
+          referencedLogicalBytes: (319.0 - 180.0 - 85.0) * 1024 * 1024 * 1024,
+          uniqueLogicalBytes: (319.0 - 180.0 - 85.0) * 1024 * 1024 * 1024,
+          observationStatus: 'observed',
+          coverage: 'complete',
+          modifiedTime: '2025-04-08T03:00:00Z',
+          category: 'Mock Aggregate Summary',
+          cleanupSafe: 'summary_non_selectable'
+        }
+      ]
+    },
+    {
+      id: 'node_d_vms',
+      name: 'VirtualMachines',
+      path: 'D:\\VirtualMachines',
+      kind: 'directory',
+      entryCount: 450,
+      uniqueObjectCount: 450,
+      referencedAllocatedBytes: 180.0 * 1024 * 1024 * 1024,
+      uniqueAllocatedBytes: 180.0 * 1024 * 1024 * 1024,
+      referencedLogicalBytes: 179.0 * 1024 * 1024 * 1024,
+      uniqueLogicalBytes: 179.0 * 1024 * 1024 * 1024,
+      observationStatus: 'observed',
+      coverage: 'complete',
+      modifiedTime: '2025-04-07T18:00:00Z',
+      category: 'Hyper-V Disks & VMs',
+      cleanupSafe: 'user_reviewable',
+      children: [
+        {
+          id: 'node_d_vm_ubuntu',
+          name: 'Ubuntu_Dev.vhdx',
+          path: 'D:\\VirtualMachines\\Ubuntu_Dev.vhdx',
+          kind: 'file',
+          entryCount: 1,
+          uniqueObjectCount: 1,
+          referencedAllocatedBytes: 120.0 * 1024 * 1024 * 1024,
+          uniqueAllocatedBytes: 120.0 * 1024 * 1024 * 1024,
+          referencedLogicalBytes: 120.0 * 1024 * 1024 * 1024,
+          uniqueLogicalBytes: 120.0 * 1024 * 1024 * 1024,
+          observationStatus: 'observed',
+          coverage: 'complete',
+          fileExt: '.vhdx',
+          modifiedTime: '2025-04-07T18:00:00Z',
+          category: 'Virtual Hard Disk',
+          cleanupSafe: 'user_reviewable'
+        },
+        {
+          id: 'node_d_vm_windows',
+          name: 'Windows_TestLab.vhdx',
+          path: 'D:\\VirtualMachines\\Windows_TestLab.vhdx',
+          kind: 'file',
+          entryCount: 1,
+          uniqueObjectCount: 1,
+          referencedAllocatedBytes: 50.0 * 1024 * 1024 * 1024,
+          uniqueAllocatedBytes: 50.0 * 1024 * 1024 * 1024,
+          referencedLogicalBytes: 50.0 * 1024 * 1024 * 1024,
+          uniqueLogicalBytes: 50.0 * 1024 * 1024 * 1024,
+          observationStatus: 'observed',
+          coverage: 'complete',
+          fileExt: '.vhdx',
+          modifiedTime: '2025-03-20T14:00:00Z',
+          category: 'Virtual Hard Disk',
+          cleanupSafe: 'user_reviewable'
+        },
+        {
+          id: 'node_d_vms_remainder',
+          name: '[448 VM configuration & snapshot files]',
+          path: 'D:\\VirtualMachines\\ [Mock Aggregate Summary]',
+          kind: 'summary_remainder',
+          isSummaryRemainder: true,
+          entryCount: 448,
+          uniqueObjectCount: 448,
+          referencedAllocatedBytes: (180.0 - 120.0 - 50.0) * 1024 * 1024 * 1024,
+          uniqueAllocatedBytes: (180.0 - 120.0 - 50.0) * 1024 * 1024 * 1024,
+          referencedLogicalBytes: (179.0 - 120.0 - 50.0) * 1024 * 1024 * 1024,
+          uniqueLogicalBytes: (179.0 - 120.0 - 50.0) * 1024 * 1024 * 1024,
+          observationStatus: 'observed',
+          coverage: 'complete',
+          modifiedTime: '2025-03-20T14:00:00Z',
+          category: 'Mock Aggregate Summary',
+          cleanupSafe: 'summary_non_selectable'
+        }
+      ]
+    },
+    {
+      id: 'node_d_media',
+      name: 'MediaLibrary',
+      path: 'D:\\MediaLibrary',
+      kind: 'directory',
+      entryCount: 8500,
+      uniqueObjectCount: 8500,
+      referencedAllocatedBytes: 70.0 * 1024 * 1024 * 1024,
+      uniqueAllocatedBytes: 70.0 * 1024 * 1024 * 1024,
+      referencedLogicalBytes: 70.0 * 1024 * 1024 * 1024,
+      uniqueLogicalBytes: 70.0 * 1024 * 1024 * 1024,
+      observationStatus: 'observed',
+      coverage: 'complete',
+      modifiedTime: '2025-04-06T12:00:00Z',
+      category: 'Media Production Assets',
+      cleanupSafe: 'user_reviewable',
+      children: [
+        {
+          id: 'node_d_media_raw4k',
+          name: '4K_Raw_Footage.mp4',
+          path: 'D:\\MediaLibrary\\4K_Raw_Footage.mp4',
+          kind: 'file',
+          entryCount: 1,
+          uniqueObjectCount: 1,
+          referencedAllocatedBytes: 42.0 * 1024 * 1024 * 1024,
+          uniqueAllocatedBytes: 42.0 * 1024 * 1024 * 1024,
+          referencedLogicalBytes: 42.0 * 1024 * 1024 * 1024,
+          uniqueLogicalBytes: 42.0 * 1024 * 1024 * 1024,
+          observationStatus: 'observed',
+          coverage: 'complete',
+          fileExt: '.mp4',
+          modifiedTime: '2025-04-06T12:00:00Z',
+          category: 'Video Footage',
+          cleanupSafe: 'user_reviewable'
+        },
+        {
+          id: 'node_d_media_remainder',
+          name: '[8,499 raw audio & video clips]',
+          path: 'D:\\MediaLibrary\\ [Mock Aggregate Summary]',
+          kind: 'summary_remainder',
+          isSummaryRemainder: true,
+          entryCount: 8499,
+          uniqueObjectCount: 8499,
+          referencedAllocatedBytes: (70.0 - 42.0) * 1024 * 1024 * 1024,
+          uniqueAllocatedBytes: (70.0 - 42.0) * 1024 * 1024 * 1024,
+          referencedLogicalBytes: (70.0 - 42.0) * 1024 * 1024 * 1024,
+          uniqueLogicalBytes: (70.0 - 42.0) * 1024 * 1024 * 1024,
+          observationStatus: 'observed',
+          coverage: 'complete',
+          modifiedTime: '2025-04-01T09:00:00Z',
+          category: 'Mock Aggregate Summary',
+          cleanupSafe: 'summary_non_selectable'
+        }
+      ]
+    }
+  ]
+};
+
+// Historical Downloads snapshot (Feb 10, 2025)
+export const MOCK_TREE_DOWNLOADS_HISTORICAL = {
+  id: 'node_snap_downloads_root',
+  name: 'Downloads',
+  path: 'C:\\Users\\Alex\\Downloads',
+  kind: 'directory',
+  entryCount: 85,
+  uniqueObjectCount: 85,
+  referencedAllocatedBytes: 18.2 * 1024 * 1024 * 1024,
+  uniqueAllocatedBytes: 18.2 * 1024 * 1024 * 1024,
+  referencedLogicalBytes: 18.0 * 1024 * 1024 * 1024,
+  uniqueLogicalBytes: 18.0 * 1024 * 1024 * 1024,
+  observationStatus: 'observed',
+  coverage: 'complete',
+  modifiedTime: '2025-02-10T16:00:00Z',
+  category: 'Historical User Downloads (Feb 10)',
+  cleanupSafe: 'user_reviewable',
+  children: [
+    {
+      id: 'node_snap_win11_22h2',
+      name: 'Windows11_Setup_22H2.iso',
+      path: 'C:\\Users\\Alex\\Downloads\\Windows11_Setup_22H2.iso',
+      kind: 'file',
+      entryCount: 1,
+      uniqueObjectCount: 1,
+      referencedAllocatedBytes: 5.4 * 1024 * 1024 * 1024,
+      uniqueAllocatedBytes: 5.4 * 1024 * 1024 * 1024,
+      referencedLogicalBytes: 5.4 * 1024 * 1024 * 1024,
+      uniqueLogicalBytes: 5.4 * 1024 * 1024 * 1024,
+      observationStatus: 'observed',
+      coverage: 'complete',
+      fileExt: '.iso',
+      modifiedTime: '2024-11-05T08:00:00Z',
+      category: 'Disk Image',
+      cleanupSafe: 'user_reviewable'
+    },
+    {
+      id: 'node_snap_old_dataset',
+      name: 'Old_Raw_Dataset.zip',
+      path: 'C:\\Users\\Alex\\Downloads\\Old_Raw_Dataset.zip',
+      kind: 'file',
+      entryCount: 1,
+      uniqueObjectCount: 1,
+      referencedAllocatedBytes: 6.8 * 1024 * 1024 * 1024,
+      uniqueAllocatedBytes: 6.8 * 1024 * 1024 * 1024,
+      referencedLogicalBytes: 6.8 * 1024 * 1024 * 1024,
+      uniqueLogicalBytes: 6.8 * 1024 * 1024 * 1024,
+      observationStatus: 'observed',
+      coverage: 'complete',
+      fileExt: '.zip',
+      modifiedTime: '2024-08-14T12:00:00Z',
+      category: 'Archive',
+      cleanupSafe: 'user_reviewable'
+    },
+    {
+      id: 'node_snap_downloads_remainder',
+      name: '[83 other historical downloads]',
+      path: 'C:\\Users\\Alex\\Downloads\\ [Mock Aggregate Summary]',
+      kind: 'summary_remainder',
+      isSummaryRemainder: true,
+      entryCount: 83,
+      uniqueObjectCount: 83,
+      referencedAllocatedBytes: (18.2 - 5.4 - 6.8) * 1024 * 1024 * 1024,
+      uniqueAllocatedBytes: (18.2 - 5.4 - 6.8) * 1024 * 1024 * 1024,
+      referencedLogicalBytes: (18.0 - 5.4 - 6.8) * 1024 * 1024 * 1024,
+      uniqueLogicalBytes: (18.0 - 5.4 - 6.8) * 1024 * 1024 * 1024,
+      observationStatus: 'observed',
+      coverage: 'complete',
+      modifiedTime: '2025-02-10T16:00:00Z',
+      category: 'Mock Aggregate Summary',
+      cleanupSafe: 'summary_non_selectable'
+    }
+  ]
+};
+
+// Reconciliation items for volume scopes
 export const RECONCILIATION_ITEM = {
   id: 'reconciliation_unattributed',
   name: '[Unattributed Used Space]',
@@ -861,6 +1382,18 @@ export const RECONCILIATION_ITEM = {
   allocatedBytes: 24.0 * 1024 * 1024 * 1024, // 24 GB
   logicalBytes: 24.0 * 1024 * 1024 * 1024,
   description: 'Difference between Volume Used Space (392 GB) and Accounted Unique Allocation (368 GB). Indicates filesystem metadata/MFT reserves, inaccessible system regions (e.g. System Volume Information shadow copies), unsupported features, or live storage changes during the observation interval. This is a reconciliation measure, not an ordinary directory.',
+  category: 'Reconciliation Difference'
+};
+
+export const RECONCILIATION_ITEM_D = {
+  id: 'reconciliation_unattributed_d',
+  name: '[Unattributed Used Space]',
+  path: 'D:\\ (Volume Reconciliation: Unattributed Used Space)',
+  kind: 'reconciliation',
+  isReconciliation: true,
+  allocatedBytes: 4.0 * 1024 * 1024 * 1024, // 4 GB
+  logicalBytes: 4.0 * 1024 * 1024 * 1024,
+  description: 'Difference between Volume Used Space (574 GB) and Accounted Unique Allocation (570 GB) on ReFS volume.',
   category: 'Reconciliation Difference'
 };
 
@@ -879,7 +1412,10 @@ if (typeof window !== 'undefined') {
     HISTORICAL_SNAPSHOTS,
     MOCK_OBJECTS,
     MOCK_TREE_ROOT,
+    MOCK_TREE_ROOT_D,
+    MOCK_TREE_DOWNLOADS_HISTORICAL,
     RECONCILIATION_ITEM,
+    RECONCILIATION_ITEM_D,
     HARDLINK_ALIASES
   };
 }
