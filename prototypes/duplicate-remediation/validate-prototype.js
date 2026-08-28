@@ -59,10 +59,21 @@ assertEqual(staleGroup.objects.length, 2, 'Stale pair has 2 objects');
 assert(staleGroup.objects[1].isStale === true, 'Modified object is marked isStale');
 assert(staleGroup.objects[1].fileId !== staleGroup.objects[0].fileId, 'Divergent File ID is present');
 
-// 2. Accounting & Invariant Calculations
+// 2. Validate No Raw Command Strings in Handoffs
+console.log('\n--- Testing Safe Structured Handoffs ---');
+for (const group of INITIAL_GROUPS) {
+  for (const obj of group.objects) {
+    if (obj.handoffInfo) {
+      assert(!obj.handoffInfo.command, `Object ${obj.id} handoffInfo must NOT contain raw executable command strings`);
+      assert(typeof obj.handoffInfo.toolName === 'string', `Object ${obj.id} handoffInfo contains toolName`);
+      assert(typeof obj.handoffInfo.instructions === 'string', `Object ${obj.id} handoffInfo contains instructions`);
+    }
+  }
+}
+
+// 3. Accounting & Invariant Calculations
 console.log('\n--- Testing Accounting & Invariants ---');
 
-// Test A: Build artifacts consolidation (3 victim objects of 1.2 GB each -> 3.6 GB reclaim, NOT inflated by aliases)
 function computeAccounting(group, keeperId, actions) {
   let immediate = 0;
   let conditional = 0;
@@ -100,6 +111,7 @@ function computeAccounting(group, keeperId, actions) {
   return { immediate, conditional, retained, victimCount };
 }
 
+// Test A: Build artifacts consolidation (3 victim objects of 1.2 GB each -> 3.6 GB reclaim, NOT inflated by aliases)
 const buildKeeper = buildGroup.objects[0].id;
 const buildActions = {
   [buildGroup.objects[1].id]: 'hardlink_immediate',
@@ -148,11 +160,38 @@ const oneDriveActions = {
 const oneDriveRes = computeAccounting(oneDriveGroup, oneDriveKeeper, oneDriveActions);
 assertEqual(oneDriveRes.immediate, 0, 'Cloud placeholder deletion yields 0 B local disk reclaim');
 
-// 3. Verification Stages & Safety Invariants
+// 4. Verification Stages & Safety Invariants
 console.log('\n--- Testing Verification & Safety Invariants ---');
 assertEqual(VERIFICATION_STAGES.length, 5, 'Verification workflow has 5 explicit stages');
 assert(ACTION_TYPES.HARDLINK_RECOVERABLE.recoveryClass === 'retained', 'Hardlink Recoverable uses retained recovery class');
-assert(ACTION_TYPES.HARDLINK_IMMEDIATE.recoveryClass === 'immediate', 'Hardlink Immediate uses immediate recovery class');
+assert(ACTION_TYPES.HARDLINK_IMMEDIATE.recoveryClass === 'permanent', 'Hardlink Immediate uses permanent recovery class');
+assert(ACTION_TYPES.PERMANENT_DELETE.recoveryClass === 'permanent', 'Permanent Delete uses permanent recovery class');
 assert(ACTION_TYPES.RECYCLE.recoveryClass === 'conditional', 'Recycle uses conditional recovery class');
+assert(ACTION_TYPES.RETAIN.recoveryClass === 'none', 'Retain uses none recovery class');
+
+// 5. Test File ID Format
+console.log('\n--- Testing Mock File IDs ---');
+for (const group of INITIAL_GROUPS) {
+  for (const obj of group.objects) {
+    assert(typeof obj.fileId === 'string' && obj.fileId.startsWith('0x'), `Object ${obj.id} has valid hex File ID: ${obj.fileId}`);
+  }
+}
+
+// 6. Test Final-Object Exclusion Invariant
+console.log('\n--- Testing Final-Object Exclusion Invariant ---');
+function canExcludeObject(group, objectId) {
+  const activeObjects = group.objects.filter(o => !o.excluded);
+  const target = group.objects.find(o => o.id === objectId);
+  if (!target) return false;
+  if (!target.excluded && activeObjects.length <= 1) {
+    return false; // Cannot exclude final active object
+  }
+  return true;
+}
+
+const twoCopyGroup = JSON.parse(JSON.stringify(oneDriveGroup));
+assert(canExcludeObject(twoCopyGroup, twoCopyGroup.objects[0].id), 'Can exclude first copy when 2 active copies exist');
+twoCopyGroup.objects[0].excluded = true;
+assert(!canExcludeObject(twoCopyGroup, twoCopyGroup.objects[1].id), 'CANNOT exclude the only remaining active copy');
 
 console.log('\n=== All Prototype Invariant Checks Passed Successfully! ===');

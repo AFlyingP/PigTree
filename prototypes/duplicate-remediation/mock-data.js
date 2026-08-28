@@ -358,7 +358,8 @@ export const INITIAL_GROUPS = [
         handoffInfo: {
           toolName: "Microsoft OneDrive Sync Client / Windows Explorer",
           targetPath: "C:\\Users\\Alex\\OneDrive\\Projects\\2023_RenderProject.zip",
-          instructions: "Manage cloud files through OneDrive context menu ('Free up space' or 'Always keep on this device') or OneDrive Settings."
+          instructions: "Manage cloud files through OneDrive context menu ('Free up space' or 'Always keep on this device') or OneDrive Settings.",
+          rescanExpectation: "After managing cloud files in OneDrive or File Explorer, run a fresh PigTree scan to refresh cloud placeholder and hydration status."
         }
       }
     ]
@@ -412,8 +413,8 @@ export const INITIAL_GROUPS = [
         excluded: false,
         handoffInfo: {
           toolName: "Windows Settings > Installed Apps",
-          command: "ms-settings:appsfeatures",
-          instructions: "To remove or modify modern Windows packages, uninstall or repair them through Windows Settings or PowerShell AppX cmdlets."
+          instructions: "To remove or modify modern Windows packages, uninstall or repair them through Windows Settings (Apps > Installed apps) or PowerShell AppX package management cmdlets.",
+          rescanExpectation: "After modifying system packages through Windows Settings, perform a fresh PigTree scan to refresh duplicate analysis."
         }
       },
       {
@@ -448,9 +449,9 @@ export const INITIAL_GROUPS = [
         recommendedKeeper: false,
         excluded: false,
         handoffInfo: {
-          toolName: "Windows Storage Sense / Disk Cleanup (cleanmgr.exe)",
-          command: "cleanmgr.exe /d C",
-          instructions: "Run Windows Disk Cleanup or activate Storage Sense in Settings > System > Storage to clean system temporary caches safely."
+          toolName: "Windows Storage Sense / Disk Cleanup",
+          instructions: "Manage system temporary files and staging caches using Windows Storage Sense (Settings > System > Storage) or Disk Cleanup.",
+          rescanExpectation: "After running Storage Sense or Disk Cleanup, perform a fresh PigTree scan to verify released disk space."
         }
       }
     ]
@@ -567,7 +568,7 @@ export const ACTION_TYPES = {
     id: "permanent_delete",
     label: "Permanently delete",
     shortDescription: "Direct Win32 entry deletion without recycling. Immediate reclaim. Irreversible.",
-    recoveryClass: "none",
+    recoveryClass: "permanent",
     riskClass: "caution",
     requiresConfirmation: true,
     requiresTypedChallenge: true
@@ -584,7 +585,7 @@ export const ACTION_TYPES = {
     id: "hardlink_immediate",
     label: "Hard Link (Immediate reclaim)",
     shortDescription: "Point entry to keeper and immediately purge staging link after verification. Immediate reclaim. Irreversible.",
-    recoveryClass: "immediate",
+    recoveryClass: "permanent",
     riskClass: "caution",
     requiresConfirmation: true
   },
