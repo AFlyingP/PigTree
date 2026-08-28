@@ -1203,7 +1203,6 @@ export class PrototypeApp {
             </div>
             <div class="metric-group">
               <span class="metric-label">Conditional Future Release (Recycle)</span>
-              <span class="metric-label">Conditional Future Release (Recycle)</span>
               <span class="metric-value metric-conditional">${formatBytes(globalAcct.conditional)}</span>
             </div>
             <div class="metric-group">
