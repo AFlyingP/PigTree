@@ -194,4 +194,15 @@ assert(canExcludeObject(twoCopyGroup, twoCopyGroup.objects[0].id), 'Can exclude 
 twoCopyGroup.objects[0].excluded = true;
 assert(!canExcludeObject(twoCopyGroup, twoCopyGroup.objects[1].id), 'CANNOT exclude the only remaining active copy');
 
+// 7. Test Dynamic Scenario & Filter Availability
+console.log('\n--- Testing Dynamic Scenario & Filter Availability ---');
+const statuses = new Set(INITIAL_GROUPS.map(g => g.status));
+assert(statuses.has('candidate'), 'Candidate status scenario available');
+assert(statuses.has('verified'), 'Verified status scenario available');
+assert(statuses.has('stale_error'), 'Stale/Prohibited error status scenario available');
+const hasProtected = INITIAL_GROUPS.some(g => g.objects.some(o => o.isProtected));
+assert(hasProtected, 'Protected system resource scenario available');
+const hasCloud = INITIAL_GROUPS.some(g => g.objects.some(o => o.isCloud));
+assert(hasCloud, 'Cloud placeholder scenario available');
+
 console.log('\n=== All Prototype Invariant Checks Passed Successfully! ===');

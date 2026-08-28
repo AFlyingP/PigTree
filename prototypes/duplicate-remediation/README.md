@@ -91,10 +91,10 @@ Clicking **Preview Immutable Action Plan** opens the execution manifest modal:
 
 ## Keyboard Navigation & Accessibility
 
-- **Variant Switching**: Press <kbd>&larr;</kbd> (Left Arrow) or <kbd>&rarr;</kbd> (Right Arrow) to toggle between Guided, Matrix, and Plan workspaces (automatically suppressed when typing in inputs or interacting with dialogs).
-- **Dialogs**: Press <kbd>Escape</kbd> to close any active modal with focus restored to the trigger button.
-- **Screen Readers**: Full ARIA markup (`aria-live="polite"` status announcer, accessible headings, semantic tables, and modal focus traps).
-- **Contrast & Theming**: Supports Light Mode, Dark Mode (`prefers-color-scheme: dark`), Forced Colors mode, and scalable rem typography at 200% zoom.
+- **Variant Switching**: Press <kbd>&larr;</kbd> (Left Arrow) or <kbd>&rarr;</kbd> (Right Arrow) to switch between Guided, Matrix, and Plan workspaces when focus is on the body, main workspace, or non-interactive containers (safely suppressed while focus is inside any form input, select, textarea, button, link, summary, details, table, grid, dialog, contenteditable, or when modifier keys are pressed).
+- **Dialogs**: Press <kbd>Escape</kbd> to close any active modal with focus restored to the trigger button. Full Tab/Shift+Tab focus trap is enforced while open.
+- **Screen Readers**: Full ARIA markup (`aria-live="polite"` status announcer, accessible headings, semantic tables with captions and scopes, mutually exclusive keeper radio groups, explicit select labels, and modal focus traps).
+- **Contrast & Theming**: Supports Light Mode, Dark Mode (`prefers-color-scheme: dark`), Forced Colors mode, `prefers-reduced-motion: reduce` support, and scalable rem typography at 200% zoom and 360px viewport widths without content occlusion.
 
 ---
 

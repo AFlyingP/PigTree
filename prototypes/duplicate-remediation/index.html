@@ -8,7 +8,7 @@
 </head>
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>
-  
+
   <!-- ARIA Live Announcer for screen readers -->
   <div id="aria-live-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
@@ -57,8 +57,8 @@
     </div>
   </main>
 
-  <!-- Dialog / Modal Container -->
-  <div id="modal-container" role="region" aria-label="Dialogs and Overlays"></div>
+  <!-- Dialog / Modal Container (No landmark role when empty) -->
+  <div id="modal-container"></div>
 
   <!-- Floating Variant Switcher Bar -->
   <aside class="floating-switcher-bar" aria-label="Prototype Variant Switcher">
@@ -75,7 +75,7 @@
       </button>
     </div>
     <div class="switcher-hint">
-      <span>Keyboard: Use <kbd>&larr;</kbd> / <kbd>&rarr;</kbd> keys to switch variants</span>
+      <span>Keyboard: Use <kbd>&larr;</kbd> / <kbd>&rarr;</kbd> keys (when outside inputs/tables) to switch variants</span>
     </div>
   </aside>
 
