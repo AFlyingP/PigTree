@@ -160,6 +160,30 @@ The allocation expected to become free if a specific validated Action Plan succe
 **Action Plan**:
 An immutable proposed set of operations over specified Directory Entries and Filesystem Objects, including preconditions, expected relationship changes, expected Reclaimable Allocation, recovery expectations, and known uncertainties. Deleting an entry removes that Directory Entry; it frees object allocation only when no remaining filesystem references preserve that allocation. Hard-link replacement changes which Filesystem Object an entry refers to rather than deleting every alias of either object.
 
+**Action Risk Class**:
+The operation classification routine, caution, protected, or prohibited, derived from explicit reasons about potential data loss, system disruption, uncertainty, and recoverability. Routine means ordinary safeguards suffice; caution requires focused acknowledgement; protected replaces direct mutation with a native/provider handoff; prohibited means no safe or sufficiently authorized mutation path exists.
+_Avoid_: Safe, numeric score, ML confidence
+
+**Recovery Class**:
+The declared recovery expectation of an operation, including whether it relies on a Recovery Artifact or is permanent. It does not guarantee that a platform-managed artifact will remain available indefinitely and does not imply immediate Reclaimable Allocation.
+_Avoid_: Undo mode, backup level
+
+**Recovery Artifact**:
+Preserved state or a platform-managed recovery reference created or retained by an Action Execution to support an authorized restore. It may continue to occupy allocation and has an explicitly stated retention owner and limits.
+_Avoid_: Backup copy, undo file
+
+**Action Execution**:
+One time-bounded attempt to apply an immutable Action Plan to live storage under a stated security context and consent policy.
+_Avoid_: Mutation run, cleanup session
+
+**Execution Record**:
+An immutable record of the evidence and outcomes of an Action Execution, including precondition observations, Commit Points, per-operation outcomes, errors, and Recovery Artifacts. It does not alter the source Action Plan or Analysis Snapshot.
+_Avoid_: Audit log, run history
+
+**Commit Point**:
+The operation-specific state transition after which cancellation cannot simply leave that operation unattempted; it must reach a recorded outcome or use recovery already authorized by the Action Plan. It does not imply whole-plan atomicity.
+_Avoid_: Point of no return, transaction boundary
+
 **Entry Count**:
 The number of Directory Entries reachable in a stated scope and filter; multiple entries that refer to the same Filesystem Object count separately. Every count declares whether it includes the scope root and which object kinds it includes.
 
