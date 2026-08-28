@@ -24,11 +24,23 @@ Open your browser to any of the three variant routes:
 - **Variant B (Evidence Matrix)**: [http://127.0.0.1:8015/?variant=matrix](http://127.0.0.1:8015/?variant=matrix)
 - **Variant C (Plan Workspace)**: [http://127.0.0.1:8015/?variant=plan](http://127.0.0.1:8015/?variant=plan)
 
-To run the automated validation test suite:
+To run the syntax and invariant validation test suite (run each command individually to verify exit codes):
 
 ```bash
+# 1. Syntax verification of all prototype scripts
+node --check prototypes/duplicate-remediation/app.js
+node --check prototypes/duplicate-remediation/mock-data.js
+node --check prototypes/duplicate-remediation/validate-prototype.js
+node --check prototypes/duplicate-remediation/validate-runtime.js
+
+# 2. Domain, accounting, eligibility, and exclusion invariant validation
 node prototypes/duplicate-remediation/validate-prototype.js
+
+# 3. Runtime structure, renderer tails, modal methods, and listener attachment verification
+node prototypes/duplicate-remediation/validate-runtime.js
 ```
+
+*(Note: Static runtime structure verification confirms complete tail recovery, AST markers, and control listener mappings, but does not replace live browser interaction testing.)*
 
 ---
 
