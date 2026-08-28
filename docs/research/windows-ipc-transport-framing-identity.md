@@ -46,10 +46,11 @@ PigTree's approved technology baseline establishes a multi-process architecture 
 |                   +----------------------------------+                   |  +----------------------------------+  |
 |                                                                          |                                        |
 |                                            [ShellExecuteExW runas UAC]   | Session-Host Coordinated Elevation     |
-|                                            [Ephemeral Broker Nonce]      | (Full Interactive GUI & CLI Parity)    |
+|                                            [SEE_MASK_NOCLOSEPROCESS]     | (Full Interactive GUI & CLI Parity)    |
+|                                            [Mutual Process Identity]     | Non-Secret Routing Context on CLI      |
 |                                                                          v                                        |
 |                                                     +---------------------------------------+                     |
-|                                                     |     Elevated Read-Only Broker         |                     |
+|                                                     |      pigtree-elevated-broker.exe      |                     |
 |                                                     | (Volume Handle Opener & Orchestrator) |                     |
 |                                                     |         [High Integrity Level]        |                     |
 |                                                     +---------------------------------------+                     |
@@ -133,11 +134,23 @@ Privileged whole-volume analysis requires an explicit, audited elevation flow co
 2. The **Medium-Integrity Rust Session Host** evaluates the scan plan, identifies the privilege requirement, and returns a typed `ElevationChallenge { challenge_id, scan_target, proposed_adapter }` over Boundary 1.
 3. The client presents the challenge to the user (GUI dialog or interactive CLI prompt). Upon user approval, the client submits `challenge.accept { challenge_id }`.
 4. The **Medium-Integrity Session Host—not the WPF client—coordinates elevation**:
-   - The Session Host creates a dedicated Named Pipe listener `\\\\.\\pipe\\pigtree-broker-{SessionUUID}` with a freshly generated 256-bit broker launch nonce and first-instance protection.
-   - The Session Host invokes `ShellExecuteExW` with `lpVerb = L"runas"` targeting `pigtree-broker.exe`, passing the broker pipe path.
-   - Windows triggers the User Account Control (UAC) consent dialog.
-   - Upon elevation, `pigtree-broker.exe` (High IL) connects to the Session Host's broker pipe, submits the 256-bit broker nonce, and verifies the active session and plan ID.
-   - This architecture guarantees identical privilege orchestration for both GUI and CLI automation workflows.
+   - **Cross-Elevation Handle Boundary**: In Windows, invoking elevation via `ShellExecuteExW` (`lpVerb = L"runas"`) crosses an elevation and desktop security boundary and **cannot inherit kernel handles** (such as bootstrap pipes).
+   - **Non-Secret Command-Line Routing Context**: Any parameters passed on the command line to `pigtree-elevated-broker.exe` are visible via WMI, ETW, and Task Manager, and **must not be treated as secrets or authenticators**. The Session Host passes strictly non-secret routing/correlation arguments: the Named Pipe path (`\\\\.\\pipe\\pigtree-elevated-broker-{SessionUUID}`), the expected Session Host PID, the expected desktop Session ID, and the opaque Operation ID.
+   - **Mutual Live Process Identity Binding**:
+     1. The Session Host creates the Named Pipe instance with `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`, and an explicit SDDL DACL allowing current user SID and Administrator SID.
+     2. The Session Host calls `ShellExecuteExW` with `fMask = SEE_MASK_NOCLOSEPROCESS` targeting the packaged `pigtree-elevated-broker.exe` binary, retaining the live process handle (`hProcess`) of the launched elevated broker.
+     3. Windows triggers the User Account Control (UAC) consent dialog.
+     4. Upon elevation, `pigtree-elevated-broker.exe` connects to the Session Host's broker pipe endpoint.
+     5. **Host-Side Verification**: The Session Host calls `GetNamedPipeClientProcessId(hPipe, &clientPid)` and validates:
+        - `clientPid` strictly matches `GetProcessId(hProcess)` of the retained broker handle.
+        - `GetNamedPipeClientSessionId` matches the active user desktop session.
+        - `GetProcessTimes` matches the exact creation timestamp of `hProcess` (eliminating PID-reuse race conditions).
+        - Queries the client process token via `OpenProcessToken` to confirm it holds **High Mandatory Integrity Level**.
+     6. **Broker-Side Verification**: Before sending any volume observations, `pigtree-elevated-broker.exe` calls `GetNamedPipeServerProcessId(hPipe, &serverPid)` and `GetNamedPipeServerSessionId` and validates:
+        - `serverPid` matches the expected Medium-Integrity Session Host PID from the routing arguments.
+        - `serverPid` corresponds to a live process executing the signed `pigtree-engine.exe` binary within the same installed application directory.
+     7. **Post-Binding Ephemeral Channel Key**: Once mutual live process identity is kernel-verified on both sides, the engine and broker execute an in-band key exchange over the pipe to establish an ephemeral session channel key for message authentication, establishing cryptographic integrity post-binding without claiming command-line secrecy.
+   - This architecture guarantees identical privilege orchestration for both interactive GUI and scriptable CLI automation workflows.
 
 #### Restricted Raw-Parser Child Launch & Sandboxing
 ADR 0001 establishes that raw on-disk NTFS metadata parsing involves parsing complex, undocumented binary structures from DASD storage. Because parser bugs or malformed on-disk filesystems could lead to memory corruption, the raw parser must be completely isolated from privileged credentials:
@@ -262,45 +275,30 @@ $$\text{Required Bandwidth} = 170,000 \text{ items/s} \times 128 \text{ bytes} \
 
 ## 4. Launch Orchestration, Identity Authentication, and Security Controls
 
-### 4.1 Nonce Delivery and Process Identity Binding
+### 4.1 Launch Orchestration, Nonce Delivery, and Identity Binding
 
-To protect against local tampering, eavesdropping, and rapid PID-reuse attacks, all IPC connections enforce multi-factor identity binding:
+PigTree distinguishes between **Same-Integrity Process Creation** (where handle inheritance is supported) and **Cross-Integrity Elevation** (where handle inheritance is impossible).
 
-```
-[ Client / Parent Process ]                               [ Server / Child Process ]
-             |                                                         |
-             | 1. Generate 256-bit CSPRNG Launch Secret                |
-             | 2. Create Inherited Read-Only Bootstrap Pipe            |
-             | 3. CreateProcessW(PROC_THREAD_ATTRIBUTE_HANDLE_LIST)   |
-             | ------------------------------------------------------> |
-             |                                                         |
-             | 4. Transmits 256-bit Secret over Bootstrap Pipe         |
-             | ======================================================> |
-             |                                 5. Reads Launch Secret  |
-             |                                 6. Closes Bootstrap Pipe|
-             |                                 7. Creates Named Pipe   |
-             |                                    (FIRST_PIPE_INSTANCE |
-             |                                     REJECT_REMOTE)      |
-             |                                                         |
-             | 8. Connects with TokenImpersonationLevel.Identification |
-             | ======================================================> |
-             |                                                         |
-             | 9. Sends Handshake Frame [Magic, ClientPID, Nonce]      |
-             | ------------------------------------------------------> |
-             |                                                         |
-             |                                10. Server Validates:    |
-             |                                    - Nonce Matches      |
-             |                                    - GetNamedPipeClient |
-             |                                      ProcessId == PID   |
-             |                                    - GetProcessTimes    |
-             |                                      Creation Time Match|
-             |                                    - ClientSessionId    |
-             |                                                         |
-             | 11. Handshake Accepted [Status: OK]                     |
-             | <------------------------------------------------------ |
-             |                                                         |
-             | === SECURE AUTHENTICATED SESSION ESTABLISHED ===        |
-```
+#### 4.1.1 Same-Integrity Launch (WPF <-> Session Host & Host <-> Scan Worker)
+At same-integrity boundaries launched via `CreateProcessW`:
+1. **Inherited Read-Only Bootstrap Pipe**: Secrets and nonces are **never passed on the command line** (which leaks to Task Manager, WMI, and ETW). Instead, the parent creates an anonymous read-only bootstrap pipe handle, whitelists it in `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` with `bInheritHandles = TRUE`, and transmits the 256-bit CSPRNG secret out-of-band across the pipe handle.
+2. **Process Identity Verification**: The server confirms client identity via:
+   - Nonce equality verification.
+   - `GetNamedPipeClientProcessId(hPipe, &clientPid)` matching expected child/parent PID.
+   - `GetNamedPipeClientSessionId` matching expected desktop session ID.
+   - `GetProcessTimes` creation timestamp comparison against the live process handle to eliminate rapid PID-reuse attacks.
+3. **Client Impersonation Safeguard**: .NET `NamedPipeClientStream` strictly specifies `TokenImpersonationLevel.Identification`, preventing unauthorized server token impersonation.
+
+#### 4.1.2 Cross-Integrity Elevated Broker Launch (Session Host -> pigtree-elevated-broker.exe)
+Across the UAC elevation boundary via `ShellExecuteExW` (`lpVerb = L"runas"`):
+1. **No Handle Inheritance**: Windows blocks kernel handle inheritance across elevation boundaries; bootstrap pipes cannot cross.
+2. **Non-Secret Routing Context Only**: Any parameters on the command line are observable and **are strictly treated as non-secret routing/correlation context** (e.g., target Named Pipe name `\\\\.\\pipe\\pigtree-elevated-broker-{SessionUUID}`, expected Session Host PID, Session ID, and Operation ID). **No secret or authenticator is passed on the command line.**
+3. **Kernel-Anchored Mutual Live Process Identity Binding**:
+   - The Session Host retains the live process handle (`hProcess`) of the elevated broker returned by `ShellExecuteExW` configured with `SEE_MASK_NOCLOSEPROCESS`.
+   - When `pigtree-elevated-broker.exe` connects to the pipe:
+     - **Host checks Broker**: The Session Host verifies that `GetNamedPipeClientProcessId` matches `GetProcessId(hProcess)`, that `GetProcessTimes` matches the creation time of `hProcess`, that the session ID matches, and that the client token is High Mandatory Integrity Level.
+     - **Broker checks Host**: Before transmitting observations or executing operations, `pigtree-elevated-broker.exe` calls `GetNamedPipeServerProcessId` and verifies that the pipe server PID corresponds to the expected Medium-Integrity engine process executing the signed `pigtree-engine.exe` binary in the trusted installation directory within the same user session.
+4. **Post-Binding Ephemeral Channel Key**: Once mutual live process identities are verified through kernel process handles on both sides, the host and broker establish an ephemeral session channel key via an in-band key exchange over the pipe, securing all subsequent message traffic without relying on pre-connection command-line secrecy.
 
 ### 4.2 Security Descriptors, SDDL, and Mandatory Integrity Levels
 
@@ -510,6 +508,8 @@ To guarantee the reliability, security, and performance of the IPC subsystem, th
    - *Security Descriptor Definition Language (SDDL) for Mandatory Labels*: [Microsoft Learn - Mandatory Integrity Labels in SDDL](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control).
    - *Job Objects & Limits*: [Microsoft Learn - Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects) (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, `SetInformationJobObject`).
    - *GetProcessTimes & Process Security*: [Microsoft Learn - GetProcessTimes](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes).
+   - *ShellExecuteExW function & SEE_MASK_NOCLOSEPROCESS*: [Microsoft Learn - ShellExecuteExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw).
+   - *GetNamedPipeServerProcessId function*: [Microsoft Learn - GetNamedPipeServerProcessId](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeserverprocessid).
 
 2. **Microsoft .NET Documentation**:
    - *System.IO.Pipes.NamedPipeClientStream*: [Microsoft Learn - NamedPipeClientStream Class](https://learn.microsoft.com/en-us/dotnet/api/system.io.pipes.namedpipeclientstream).
