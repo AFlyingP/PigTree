@@ -11,7 +11,7 @@
 
 To establish a production-ready Windows distribution and update model for PigTree, this research delineates **immutable Windows platform facts** from **recommended architectural choices** for the v1 release.
 
-PigTree combines a **WPF (.NET 8/9) front-end GUI**, a **private medium-integrity Rust core engine / session-host**, **disposable read-only scanning workers**, a **short-lived elevated read-only broker with isolated raw parser**, a **dedicated short-lived mutation worker**, and a **standalone Rust CLI**.
+PigTree combines a **WPF front-end GUI on the latest supported .NET Long Term Support (LTS) release at implementation/release time**, a **private medium-integrity Rust core engine / session-host**, **disposable read-only scanning workers**, a **short-lived elevated read-only broker with isolated raw parser**, a **dedicated short-lived mutation worker**, and a **standalone Rust CLI**.
 
 ```
  +-----------------------------+     +-----------------------------+
@@ -50,21 +50,23 @@ PigTree combines a **WPF (.NET 8/9) front-end GUI**, a **private medium-integrit
 ```
 
 ### 1.1 Objective Platform Facts (Windows & .NET Runtime Realities)
-1. **WPF Native AOT Incompatibility:** WPF is fundamentally incompatible with Native AOT in .NET 8 and .NET 9. The framework relies inherently on unannotated runtime reflection, dynamic dependency property registration, runtime BAML parsing, and unmanaged C++/CLI shims (`wpfgfx_cor3.dll`, `DirectWriteForwarder`), triggering pervasive trimming warnings (`IL2026`, `IL3050`) and runtime crashes.
+1. **WPF Native AOT Incompatibility:** WPF is fundamentally incompatible with Native AOT in supported .NET LTS releases. The framework relies inherently on unannotated runtime reflection, dynamic dependency property registration, runtime BAML parsing, and unmanaged C++/CLI shims (`wpfgfx_cor3.dll`, `DirectWriteForwarder`), triggering pervasive trimming warnings (`IL2026`, `IL3050`) and runtime crashes.
 2. **Single-File Self-Extract Overhead:** WPF contains unmanaged C++ assemblies that cannot be loaded purely in-memory from bundle headers. Using `.NET Single-File` with native extraction forces runtime unpacking to `%TEMP%\net\*`, adding cold-start latency, triggering AV heuristics, and leaving disk litter.
 3. **User Interface Privilege Isolation (UIPI):** An elevated (High Integrity) GUI cannot receive unprivileged Windows messages from File Explorer (breaking drag-and-drop) or standard accessibility tools (screen readers).
 4. **MSIX Signature Gate:** MSIX packages refuse installation on Windows unless signed by a certificate chaining to the local machine's Trusted Root Certification Authorities store, blocking unmanaged open-source distribution without pre-installed root certs or Developer Mode sideloading.
-5. **Windows In-Use File Locking:** Executing binaries (`.exe`, `.dll`) hold memory-mapped image handles with `FILE_SHARE_READ`, causing direct overwrite or deletion to fail with `ERROR_ACCESS_DENIED` (5) or `ERROR_SHARING_VIOLATION` (32).
+5. **Windows In-Use File Locking & Multi-File Atomicity:** Executing binaries (`.exe`, `.dll`) hold memory-mapped image handles with `FILE_SHARE_READ`, causing direct overwrite or deletion to fail with `ERROR_ACCESS_DENIED` (5) or `ERROR_SHARING_VIOLATION` (32). Swapping a directory of multiple loose binaries in-place cannot be executed atomically at the individual file level.
+6. **Command-Line Exposure:** Process command-line arguments are visible across the logon session via WMI (`Win32_Process`), ETW tracing, and process inspection tools. Passing secrets via command-line arguments is insecure regardless of Named Pipe DACLs.
 
 ### 1.2 Architectural Recommendations for PigTree v1
-1. **Self-Contained ReadyToRun (R2R) Multi-File Layout:** Ship .NET 8/9 as self-contained with R2R ahead-of-time precompilation, distributing assemblies and native binaries loose in the application directory without single-file bundling or Native AOT.
+1. **Self-Contained ReadyToRun (R2R) Multi-File Layout:** Ship the latest supported .NET LTS at implementation/release time as self-contained with R2R ahead-of-time precompilation, distributing assemblies and native binaries loose in the application directory without single-file bundling or Native AOT.
 2. **Dual-Channel Distribution (Portable-First + Per-User MSI):**
-   * *Portable ZIP:* First-class, zero-install, zero-registry archive targetable by power users, sysadmins, and incident responders.
-   * *WiX v5 MSI:* Default Per-User installer (`Scope="perUser"`, `%LocalAppData%\Programs\PigTree`) requiring **zero UAC prompts** for installation or update, with optional Per-Machine enterprise deployment (`Scope="perMachine"`).
-3. **Typed Challenge Elevation Architecture (Strict ADR 0001/0002/0003 Conformance):**
+   * *Portable ZIP:* First-class, zero-install, zero-registry archive targetable by power users, sysadmins, and incident responders. For v1, updates are download-only / manual replacement with release notification and checksum/signature verification (or an atomic versioned-directory pointer switch).
+   * *WiX v5 MSI:* Default Per-User installer (`Scope="perUser"`, `%LocalAppData%\Programs\PigTree`) requiring **zero UAC prompts** for installation or update, with transactional `MajorUpgrade` rollback and optional Per-Machine enterprise deployment (`Scope="perMachine"`).
+3. **Typed Challenge Elevation Architecture (Strict ADR 0001/0002/0003 & IPC Conformance):**
    * The WPF GUI and CLI speak **only** to the medium-integrity Engine via typed IPC.
-   * When elevated scanning is required, the Engine issues a typed `ScanChallenge`. Upon user consent, the Engine (or a minimal unelevated launcher helper) invokes `ShellExecuteExW` with `lpVerb = L"runas"` to launch `pigtree-elevated-broker.exe`.
-   * The elevated broker is strictly read-only, bound to a single-use cryptographically strong nonce, session ID, target volume GUID, and immutable Scan Plan, connecting back *only* to the Engine's authenticated private IPC endpoint.
+   * When elevated scanning is required, the Engine issues a typed `ScanChallenge`. Upon user consent, the Engine coordinates launching `pigtree-elevated-broker.exe` via `ShellExecuteExW` (`lpVerb = L"runas"`, `fMask = SEE_MASK_NOCLOSEPROCESS`), retaining the process handle `hProcess`.
+   * **Zero Command-Line Secrets:** Pipe endpoint path, broker role, session identifier, target volume identifier, and immutable plan digest on the command line are strictly non-secret routing/context metadata. Authoritative bootstrap, token validation, PID/creation-time verification, and proof protocols are owned exclusively by the IPC architecture.
+   * The elevated broker is strictly read-only, connecting back *only* to the Engine's authenticated private IPC endpoint.
    * The elevated broker spawns `pigtree-raw-parser.exe` in an isolated restricted child process with watchdog monitoring; any parsing fault triggers immediate fail-closed fallback to elevated documented Win32 traversal.
    * File remediation/cleanup is handled exclusively by a dedicated `pigtree-mutation-worker.exe` with Live Preflight and Commit Point verification; **no scanner/mutator reuse is permitted**.
 4. **Hybrid Shell Integration:** Classic HKCU registry verbs for universal Windows 10/11 context menus, with an optional Sparse Package (Package with External Location via `Add-AppxPackage -Register <Manifest> -ExternalLocation <AppDir>`) for top-level Windows 11 context menus.
@@ -74,7 +76,7 @@ PigTree combines a **WPF (.NET 8/9) front-end GUI**, a **private medium-integrit
 
 ## 2. Comparative Evaluation Matrix: Packaging & Distribution Modalities
 
-| Dimension | Self-Contained + R2R (Multi-File) | Framework-Dependent .NET | Native AOT (WPF) | MSIX Packaging | WiX Toolset v5 (MSI) | Portable ZIP |
+| Dimension | Self-Contained + R2R (.NET LTS Multi-File) | Framework-Dependent .NET | Native AOT (WPF) | MSIX Packaging | WiX Toolset v5 (MSI) | Portable ZIP |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Prerequisites** | Zero (Runs on clean Win10/11) | Requires .NET Desktop Runtime | Zero (Direct native binary) | Requires trusted cert or Dev Mode | Zero (Windows Installer in-box) | Zero (Unpack & run) |
 | **WPF Compatibility** | **100% Fully Supported** | **100% Fully Supported** | **Unsupported / Broken** | Fully Supported | Fully Supported | Fully Supported |
@@ -83,7 +85,7 @@ PigTree combines a **WPF (.NET 8/9) front-end GUI**, a **private medium-integrit
 | **Elevation & IPC Topology** | Complete (Unrestricted Win32) | Complete (Unrestricted Win32) | Complete (Unrestricted Win32) | Restricted (AppContainer/VFS) | Complete (Standard Win32) | Complete (Unrestricted Win32)|
 | **UAC Elevation Required** | None (Runs as Standard User) | None (Runs as Standard User) | None (Runs as Standard User) | None (Per-User AppX) | **None** (for Per-User MSI) | **None** |
 | **Silent Enterprise Install**| Scripted copy | Scripted copy | Scripted copy | Intune / AppInstaller | **Native MSI (`/qn` flags)** | Scripted unpack |
-| **Update Mechanism** | In-App / WiX MajorUpgrade | In-App / WiX MajorUpgrade | In-App / WiX MajorUpgrade | AppInstaller / Store | **Windows Installer MajorUpgrade** | In-App Notice & Binary Swap |
+| **Update Mechanism** | In-App / WiX MajorUpgrade | In-App / WiX MajorUpgrade | In-App / WiX MajorUpgrade | AppInstaller / Store | **Windows Installer MajorUpgrade** | Download-Only / Manual or Versioned Switch |
 | **Reproducible Build Feasible**| **Yes (Full MSBuild/Cargo CI)**| **Yes** | **Yes** | Moderate (Appx manifest/zip) | **Yes (WiX deterministic GUIDs)** | **Yes (Normalized timestamps)** |
 
 ---
@@ -103,9 +105,10 @@ PigTree combines a **WPF (.NET 8/9) front-end GUI**, a **private medium-integrit
 
 #### Technical Findings
 
-1. **Framework-Dependent vs. Self-Contained Deployment:**
-   * *Framework-Dependent:* Relies on the host system possessing the matching **Microsoft.WindowsDesktop.App** runtime. Missing runtimes generate error dialogs (`0x80008081` / missing `hostfxr.dll`), imposing unforced friction on ad-hoc system administration.
-   * *Self-Contained:* Bundles the CoreCLR runtime engine (`coreclr.dll`, `clrjit.dll`), BCL assemblies, and native WPF rendering subsystems (`wpfgfx_cor3.dll`, `PresentationNative_cor3.dll`, `D3DCompiler_47_cor3.dll`). Guarantees zero-prerequisite execution across all supported Windows 10 (Build 19041+) and Windows 11 environments.
+1. **Targeting Supported .NET LTS Releases:**
+   * PigTree specifies targeting the **latest supported .NET Long Term Support (LTS) release at implementation/release time** (e.g., .NET 8 / .NET 10 LTS).
+   * *Framework-Dependent Deployment:* Relies on the host system possessing the matching **Microsoft.WindowsDesktop.App** runtime. Missing runtimes generate error dialogs (`0x80008081` / missing `hostfxr.dll`), imposing unforced friction on ad-hoc system administration.
+   * *Self-Contained Deployment:* Bundles the CoreCLR runtime engine (`coreclr.dll`, `clrjit.dll`), BCL assemblies, and native WPF rendering subsystems (`wpfgfx_cor3.dll`, `PresentationNative_cor3.dll`, `D3DCompiler_47_cor3.dll`). Guarantees zero-prerequisite execution across all supported Windows 10 (Build 19041+) and Windows 11 environments.
 
 2. **ReadyToRun (R2R) Compilation:**
    * Crossgen2 compiles IL assemblies ahead-of-time into ReadyToRun PE images containing dual native x64 machine code and IL fallback.
@@ -113,7 +116,7 @@ PigTree combines a **WPF (.NET 8/9) front-end GUI**, a **private medium-integrit
    * *Binary Footprint:* Increases assembly size by ~20%–30%, easily accommodated within modern distribution limits.
 
 3. **Native AOT Infeasibility for WPF:**
-   * In .NET 8 and .NET 9, **WPF is fundamentally unsupported for Native AOT and full IL trimming**.
+   * Across modern .NET LTS versions, **WPF is fundamentally unsupported for Native AOT and full IL trimming**.
    * *Root Cause Analysis:*
      * **Dynamic Reflection & Binding:** WPF data binding and template instantiations rely on dynamic reflection (`System.ComponentModel.TypeDescriptor`, `PropertyDescriptor`) without static Roslyn trim annotations, generating hundreds of `IL2026` (`RequiresUnreferencedCode`) and `IL3050` (`RequiresDynamicCode`) compiler diagnostics.
      * **BAML Stream Loading:** The BAML runtime parser dynamically maps compiled token streams to runtime types and properties.
@@ -133,10 +136,12 @@ PigTree combines a **WPF (.NET 8/9) front-end GUI**, a **private medium-integrit
 #### Primary Sources
 * [Microsoft Learn: User Interface Privilege Isolation (UIPI) Overview](https://learn.microsoft.com/en-us/windows/win32/winmsg/about-messages-and-message-queues#user-interface-privilege-isolation)
 * [Microsoft Learn: Designing Applications for UAC and Least Privilege](https://learn.microsoft.com/en-us/windows/win32/sbscs/application-manifests)
+* [Microsoft Learn: ShellExecuteExW & SEE_MASK_NOCLOSEPROCESS](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw)
 * [Microsoft Learn: Named Pipe Security and Access Rights](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)
 * [PigTree ADR 0001: Scanning Subsystem and Privilege Architecture](docs/adr/0001-scanning-and-privilege-architecture.md)
 * [PigTree ADR 0002: Guarded Cleanup and Action Safety Architecture](docs/adr/0002-guarded-cleanup-safety.md)
 * [PigTree ADR 0003: Shared Engine and Automation Contract](docs/adr/0003-shared-engine-and-automation-contract.md)
+* [PigTree Research Note: Windows Local IPC Transport, Framing, and Identity Design](docs/research/windows-ipc-transport-framing-identity.md)
 
 #### Strict Security & Elevation Protocol
 
@@ -162,8 +167,8 @@ PigTree combines a **WPF (.NET 8/9) front-end GUI**, a **private medium-integrit
 |pigtree-scan-worker.exe| |pigtree-elevated-broker| |pigtree-mutation-worker  |
 |- Medium Integrity     | |- High Integrity       | |- Medium/Elevated per-task|
 |- Disposable Worker    | |- Read-Only Vol Handle | |- Live Preflight Checks  |
-|- Win32 Traversal      | |- Bound to Nonce/Target| |- Commit Point Gates     |
-|- Target Directory     | |- Watchdog Supervisor  | |- Immutable Exec Records |
+|- Win32 Traversal      | |- Watchdog Supervisor  | |- Commit Point Gates     |
+|- Target Directory     | |- Non-Secret Routing CLI|- Immutable Exec Records |
 +-----------------------+ +-----------+-----------+ +-------------------------+
                                       | (4) Isolated Restricted Child Pipe
                                       v
@@ -192,9 +197,14 @@ PigTree combines a **WPF (.NET 8/9) front-end GUI**, a **private medium-integrit
 
 4. **Privileged Scan Flow & Elevated Broker (`pigtree-elevated-broker.exe`):**
    * When an NTFS whole-volume scan requires elevation (or protected paths produce Coverage Gaps), the Engine returns a typed `ScanChallenge` to the client.
-   * Upon explicit user confirmation (or `--elevated` CLI flag), the unelevated Engine (or an unelevated OS launcher shim) invokes Win32 `ShellExecuteExW` with `lpVerb = L"runas"` targeting `pigtree-elevated-broker.exe`.
-   * **Cryptographic Binding:** Command parameters pass a single-use cryptographically strong nonce, session GUID, target volume GUID, and private Engine Named Pipe endpoint.
-   * **Mutual IPC Rendezvous:** The elevated broker connects *exclusively* to the Engine's authenticated private Named Pipe (`\\.\pipe\pigtree-<session_guid>`), which is protected by a DACL restricted to the current user's SID (`TOKEN_USER`) and the Administrators SID (`S-1-5-32-544`). The broker proves possession of the nonce.
+   * Upon explicit user confirmation (or `--elevated` CLI flag), the unelevated Engine (or an unelevated OS launcher shim) invokes Win32 `ShellExecuteExW` with `lpVerb = L"runas"` and `fMask = SEE_MASK_NOCLOSEPROCESS` targeting `pigtree-elevated-broker.exe`, retaining the returned `hProcess` handle.
+   * **Zero Command-Line Secrets:** Command-line parameters pass only non-secret routing and contextual identifiers: the target Named Pipe endpoint path, broker role, session GUID, target volume GUID, and immutable Scan Plan digest. No secrets or tokens are placed in command-line arguments, as command lines are visible system-wide via WMI (`Win32_Process`) and ETW.
+   * **Authoritative Bootstrap & IPC Authentication:** Owned exclusively by the IPC architecture (see `docs/research/windows-ipc-transport-framing-identity.md`).
+     * The Engine creates the Named Pipe instance with `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`, and an SDDL Security Descriptor.
+     * When the broker connects, the Engine verifies the client process ID (`GetNamedPipeClientProcessId`), session ID (`GetNamedPipeClientSessionId`), and process creation timestamp (`GetProcessTimes`) matching the exact `hProcess` handle retained from `ShellExecuteExW` (binding the connection to the launched instance and defeating PID-reuse attacks).
+     * The Engine validates that the client token represents the expected user/admin elevation at High Integrity Level (`OpenProcessToken` verification).
+     * The elevated broker reciprocally validates the server process identity before trusting it.
+     * If the IPC architecture defines an out-of-band proof exchange, it occurs within the authenticated pipe stream.
    * **Strict Read-Only Enforcement:** The broker acquires `SE_MANAGE_VOLUME_NAME` / `SE_BACKUP_NAME`, opens a strictly **read-only volume handle** (`GENERIC_READ`, `FILE_SHARE_READ | FILE_SHARE_WRITE`), and acts as a supervisor. It cannot write, delete, alter ACLs, or dismount volumes.
 
 5. **Restricted Raw Parser Child & Watchdog (`pigtree-raw-parser.exe`):**
@@ -287,12 +297,18 @@ PigTree combines a **WPF (.NET 8/9) front-end GUI**, a **private medium-integrit
 * [Microsoft Learn: Restart Manager Overview](https://learn.microsoft.com/en-us/windows/win32/rstmgr/about-restart-manager)
 * [Microsoft Learn: MoveFileExW and Pending File Operations](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)
 
-#### Evaluated Update Strategies
+#### Evaluated Update Strategies & Multi-File Atomicity Realities
 
-| Strategy | Technical Mechanism | Rollback Capability | Assessment |
+1. **The Multi-File In-Use Locking Barrier:**
+   * Because PigTree consists of multiple executables (`PigTree.exe`, `pigtree-engine.exe`, `pigtree-scan-worker.exe`, `pigtree-elevated-broker.exe`, `pigtree-raw-parser.exe`, `pigtree-mutation-worker.exe`, `pigtree.exe`) and shared runtime DLLs, **an in-place update cannot atomically overwrite individual active files on disk**.
+   * Attempting loose in-place file replacement while any worker or host process holds an open image handle fails with `ERROR_ACCESS_DENIED` (5) or `ERROR_SHARING_VIOLATION` (32), leaving the application in a corrupt, partially updated state if interrupted.
+
+2. **Channel-Specific Update Architecture:**
+
+| Distribution Channel | Recommended Update Mechanism | Atomicity & Rollback Guarantees | Assessment |
 | :--- | :--- | :--- | :--- |
-| **WiX / MSI MajorUpgrade** | Windows Installer transactional execution engine + Restart Manager | **Full automatic rollback** on failure | **Recommended for MSI Channel:** Standard enterprise reliability, native silent install support. |
-| **In-App Notification + Verified Swap** | GUI queries GitHub API, downloads verified portable ZIP, launches detached updater helper to swap files on exit | Manual directory backup restore | **Recommended for Portable Channel:** Simple, self-contained, no external framework dependencies. |
+| **WiX / MSI Installed Channel** | Windows Installer `MajorUpgrade` + Restart Manager | **Full Transactional Rollback:** Handled atomically by MSI transaction boundaries; rolling back all files and registry keys if any step fails. | **Recommended for MSI Installs:** Native enterprise standard, silent `/qn` capable, zero UAC for per-user. |
+| **Portable ZIP Channel (v1 Baseline)** | In-App Release Notification + Verified Download (Manual or Versioned Directory Swap) | **Download-Only / Manual Replace or Versioned Pointer:** In v1, the app alerts the user to updates with release notes and verified checksum links. For automated swapping, a versioned directory layout (`apps/v1.0.0/`, `apps/v1.0.1/`) with an atomic launcher / current-pointer switch is required. | **Recommended for Portable:** Prevents partial in-place file corruption; preserves zero-install portable boundaries. |
 
 ---
 
@@ -347,7 +363,7 @@ PigTree/
 ├── pigtree-mutation-worker.exe    # Rust Guarded Mutation Worker (Live Preflight & Commit Points)
 ├── pigtree.exe                    # Standalone Rust CLI Entry Point (Medium Integrity)
 │
-├── coreclr.dll                    # .NET Runtime Engine
+├── coreclr.dll                    # .NET Runtime Engine (Latest Supported LTS)
 ├── clrjit.dll                     # .NET JIT Compiler
 ├── System.Private.CoreLib.dll     # Core Base Class Library
 ├── PresentationFramework.dll      # WPF Presentation Framework (R2R compiled)
@@ -374,7 +390,7 @@ PigTree/
 1. **Rejected: Framework-Dependent .NET Deployment**
    * *Reason:* Forces users to manually resolve missing .NET Desktop Runtime dependencies, breaking zero-friction system diagnostic utility expectations.
 2. **Rejected: Native AOT Compilation for WPF**
-   * *Reason:* Unsupported in .NET 8/9; pervasive dynamic reflection, runtime BAML parsing, and C++/CLI dependencies cause trimming failures (`IL2026`, `IL3050`) and runtime crashes.
+   * *Reason:* Unsupported in modern .NET LTS versions; pervasive dynamic reflection, runtime BAML parsing, and C++/CLI dependencies cause trimming failures (`IL2026`, `IL3050`) and runtime crashes.
 3. **Rejected: Single-File Bundling with Self-Extraction**
    * *Reason:* Unpacking native WPF rendering binaries (`wpfgfx_cor3.dll`) to `%TEMP%\net\*` introduces cold-start latency, disk clutter, and AV false positives.
 4. **Rejected: MSIX-Only Distribution**
@@ -383,6 +399,8 @@ PigTree/
    * *Reason:* Violates Windows UIPI (blocks Explorer drag-and-drop), breaks accessibility tools, and exposes a massive UI rendering surface to privilege escalation attacks.
 6. **Rejected: Unified / Reused Scanner-Mutator Worker**
    * *Reason:* Violates ADR 0001 and ADR 0002. Scanning is strictly read-only; mutation requires a distinct authorization lifecycle, Live Preflight verification, and Commit Point logging.
+7. **Rejected: Command-Line Secret Passing**
+   * *Reason:* Violates local IPC security architecture (`docs/research/windows-ipc-transport-framing-identity.md`). Command lines are visible via WMI/ETW; authentication and instance identity are verified via OS process handles (`SEE_MASK_NOCLOSEPROCESS`), PID/creation-time checks, and in-band IPC handshake.
 
 ---
 
@@ -442,3 +460,5 @@ Before publishing an official release, the CI/CD pipeline enforces the following
     [docs/adr/0002-guarded-cleanup-safety.md](docs/adr/0002-guarded-cleanup-safety.md)
 18. **PigTree ADR 0003 (Shared Engine and Automation Contract):**  
     [docs/adr/0003-shared-engine-and-automation-contract.md](docs/adr/0003-shared-engine-and-automation-contract.md)
+19. **PigTree Research Note (Windows Local IPC Transport, Framing, and Identity Design):**  
+    [docs/research/windows-ipc-transport-framing-identity.md](docs/research/windows-ipc-transport-framing-identity.md)
