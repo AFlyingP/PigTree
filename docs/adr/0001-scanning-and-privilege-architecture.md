@@ -66,7 +66,7 @@ Security principal (Owner), Access Rules (ACLs), alternate Content Stream enumer
 
 ### 5. Standard-First Execution and Explicit Elevation Flow
 
-All scans begin under standard-user privileges without elevation prompts, ensuring immediate utility. 
+All scans begin under standard-user privileges without elevation prompts, ensuring immediate utility.
 
 Elevation is offered only as a distinct, subsequent Analysis Run when the planner or standard run identifies:
 1. Protected paths that generated Coverage Gaps or inaccessible required metadata, or
