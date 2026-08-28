@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PigTree - Safe Duplicate Review & Remediation Prototype</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  
+  <!-- ARIA Live Announcer for screen readers -->
+  <div id="aria-live-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Windows Desktop Chrome -->
+  <header class="app-chrome" role="banner">
+    <div class="chrome-left">
+      <span class="brand-icon" aria-hidden="true">PT</span>
+      <span class="brand-title">PigTree</span>
+      <span class="brand-badge">Duplicates Review</span>
+      <span class="meta-pill"><strong>View:</strong> Duplicates Remediation</span>
+    </div>
+    <div class="chrome-meta">
+      <div class="meta-pill">
+        <span>Target:</span> <strong>C: (NTFS)</strong>
+      </div>
+      <div class="meta-pill">
+        <span>Snapshot:</span> <strong>Today 10:42</strong>
+      </div>
+      <div class="meta-pill meta-coverage">
+        <span aria-hidden="true">&#x2714;</span> <span>Coverage: Complete for candidate discovery</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hard link disclaimer banner -->
+  <div class="chrome-notice" role="note" aria-label="Filesystem semantics reminder">
+    <div>
+      <span class="notice-icon" aria-hidden="true">&#x2139;</span>
+      <strong>Filesystem Notice:</strong> Duplicate candidates are distinct Filesystem Objects. Hard Link aliases share the same underlying object and are not candidate copies. Flow stops at an immutable Action Plan preview without executing mutations.
+    </div>
+    <button id="btn-reset-state" class="btn btn-sm" title="Reset prototype state to initial defaults">Reset Prototype State</button>
+  </div>
+
+  <!-- Main Content Workspace -->
+  <main id="main-content" tabindex="-1">
+    <div id="app-root">
+      <!-- Variant View injected dynamically by app.js -->
+    </div>
+
+    <!-- Collapsible Prototype State Inspection for reviewers -->
+    <div style="max-width: 1600px; margin: 1rem auto; padding: 0 1rem;">
+      <details id="state-inspector" class="state-inspector-details">
+        <summary class="state-inspector-summary">Prototype State &amp; Verification Model (Live Inspector)</summary>
+        <pre id="state-inspector-json" class="state-inspector-content" aria-label="Raw prototype state JSON"></pre>
+      </details>
+    </div>
+  </main>
+
+  <!-- Dialog / Modal Container -->
+  <div id="modal-container" role="region" aria-label="Dialogs and Overlays"></div>
+
+  <!-- Floating Variant Switcher Bar -->
+  <aside class="floating-switcher-bar" aria-label="Prototype Variant Switcher">
+    <div class="switcher-variants" role="toolbar" aria-label="Interaction model variants">
+      <span style="font-size: var(--font-size-xs); font-weight: 700; color: var(--text-muted);">Switch Variant:</span>
+      <button class="switcher-btn" data-variant="guided" id="nav-variant-guided" aria-pressed="false">
+        <span>A. Guided Review</span>
+      </button>
+      <button class="switcher-btn" data-variant="matrix" id="nav-variant-matrix" aria-pressed="false">
+        <span>B. Evidence Matrix</span>
+      </button>
+      <button class="switcher-btn" data-variant="plan" id="nav-variant-plan" aria-pressed="false">
+        <span>C. Plan-Builder Workspace</span>
+      </button>
+    </div>
+    <div class="switcher-hint">
+      <span>Keyboard: Use <kbd>&larr;</kbd> / <kbd>&rarr;</kbd> keys to switch variants</span>
+    </div>
+  </aside>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
