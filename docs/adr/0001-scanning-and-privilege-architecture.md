@@ -30,7 +30,7 @@ The scanning subsystem is separated from the rest of PigTree across a single, de
 
 The scanning subsystem emits a typed observation stream, structured Coverage Gaps, provenance metadata, adapter-attempt and fallback lifecycle events, and a terminal Run Outcome.
 
-All higher-level concerns—including Analysis Snapshot construction, graph aggregation, whole-volume capacity reconciliation, persistence, UI rendering, and CLI output formatting—live strictly above this seam. Filesystem adapters never construct private tree models, maintain UI state, or write to persistence.
+All higher-level concerns—including Analysis Snapshot construction, deriving Scope Coverage from requested observations and Coverage Gaps relative to the Analysis Profile, graph aggregation, whole-volume capacity reconciliation, persistence, UI rendering, and CLI output formatting—live strictly above this seam. Filesystem adapters never construct private tree models, maintain UI state, or write to persistence.
 
 ### 2. Central Scan Planner
 
@@ -46,19 +46,21 @@ The v1 release defines explicit adapter boundaries based on target kind and file
 - **Standard-User NTFS Whole Volume**: Documented Win32 directory traversal.
 - **FAT32 and exFAT (Fixed and Removable Targets)**: Documented Win32 traversal.
 - **ReFS (Standard and Elevated)**: Documented Win32 traversal. Elevated USN-assisted journal discovery is an optional future capability only if rigorous benchmarks prove end-to-end throughput gains, as USN records lack size information and require secondary query enrichment.
-- **Approved Elevated NTFS Whole Volume**: A release-gated raw MFT parser adapter attempted first, with automatic, transparent fallback to elevated documented traversal upon any validation failure, unexpected layout, or parsing anomaly.
+- **Approved Elevated NTFS Whole Volume**: Elevated documented Win32 traversal is the selected adapter unless and until the stable-release verification gates in Section 11 are satisfied and the raw MFT parser adapter is explicitly enabled; only when gated and enabled does the raw-MFT-first chain apply, attempting the raw MFT parser adapter first with automatic, transparent fallback to elevated documented traversal upon any validation failure, unexpected layout, or parsing anomaly.
 - **Excluded from v1 Scope**: Direct user-mode reliance on `NtQueryDirectoryFile` as the primary contract, raw parsers for FAT32/exFAT/ReFS, whole-volume scan-and-filter for directory targets, continuous/live journal change monitoring, and SMB or remote network storage sources.
 
 ### 4. Default Analysis Profile
 
 The default Analysis Profile captures the core facts needed for accurate space analysis without incurring prohibitive secondary I/O:
-- Directory entry hierarchy, entry names, and parent relationships;
+- Directory Entry hierarchy, entry names, and parent relationships;
 - Filesystem Object classification (File, Directory, Special Object);
 - Strongest available Object Identity evidence (e.g., volume-scoped File IDs on NTFS/ReFS);
 - Logical Size and Allocated Size where supported by the filesystem;
 - Core filesystem attributes and filesystem-defined Timestamp Observations;
 - Hard Link references, Reparse Point tags, and cloud-storage placeholder characteristics;
 - Explicit Value Knowledge states (Known, Not Observed, Unavailable, Not Applicable) and observation provenance.
+
+Coverage (and Scope Coverage) is an output and snapshot semantic derived strictly above the scanner from requested observations and reported Coverage Gaps relative to the active Analysis Profile; it is not an observation class that the profile itself captures. All observed values and Value Knowledge states preserve provenance as required.
 
 Security principal (Owner), Access Rules (ACLs), alternate Content Stream enumeration, file content reading/hashing, and duplicate verification are strictly excluded from the default profile and require explicit Snapshot Enrichments or specialized analysis profiles.
 
@@ -72,13 +74,13 @@ Elevation is offered only as a distinct, subsequent Analysis Run when the planne
 
 Every elevation offer must explicitly present the target, the proposed adapter class, and the specific impact (e.g., gap resolution or speed gain). If the user declines, cancels, or encounters an elevation failure, the existing standard Analysis Snapshot remains unchanged and fully accessible.
 
-CLI execution requires an explicit command-line flag (`--elevated`) or an explicit interactive prompt to attempt privileged execution, recording the outcome cleanly in machine-readable output.
+CLI execution requires an explicit privileged-scan option/policy or allowed interactive consent to attempt privileged execution, with no surprise UAC prompts, while leaving exact CLI syntax to the shared engine and automation contract; the outcome is recorded cleanly in machine-readable output.
 
 ### 6. Worker Lifecycle and Privilege Separation
 
 Ordinary scans execute within a disposable, medium-integrity worker process.
 
-Privileged scans execute via a short-lived, least-privilege, read-only elevated broker process. The broker is cryptographically bound to a single user session, execution nonce, Scan Target, Analysis Profile, and Scan Plan. The broker exits immediately upon run completion, failure, or cancellation.
+Privileged scans execute via a short-lived, least-privilege, read-only elevated broker process. The broker is bound via authenticated IPC and session binding to a single user session, execution nonce, Scan Target, Analysis Profile, and Scan Plan. The broker exits immediately upon run completion, failure, or cancellation.
 
 The broker's capabilities are strictly constrained:
 - It operates exclusively in read-only mode;
@@ -93,7 +95,7 @@ The broker's capabilities are strictly constrained:
 The IPC channel between the main application and helper workers is treated as a strict security boundary:
 - The communication channel is authenticated and bound to the specific execution plan and nonce;
 - All messages are strictly versioned, length-bounded, and deserialized under tight size and memory caps;
-- The main process validates all payload structures, enum values, size invariants, object identities, relationship graphs, entry orderings, and target confinement boundaries;
+- The main process validates all payload structures, enum values, size invariants, Object Identity representations, relationship graphs, entry orderings, and target confinement boundaries;
 - Helper output is treated as privileged but untrusted data;
 - The interface avoids shared mutable object graphs, shared memory write segments, or unsolicited handle passing and commands.
 
@@ -101,7 +103,7 @@ The IPC channel between the main application and helper workers is treated as a 
 
 The elevated broker opens a read-only handle to the targeted volume device. The raw on-disk parsing logic executes in a separate, disposable child process isolated from the broker's lifecycle and management operations.
 
-Where supported by the platform, the parsing child runs under a restricted token with a duplicated read-only volume handle. If token restriction is constrained, process isolation and strict IPC validation remain mandatory. Any crash, hang, out-of-bounds read, or rejection in the parsing worker terminates the child cleanly without crashing the broker or compromising the fallback to documented traversal.
+Where supported by the platform, the parsing child runs under a restricted token with a duplicated read-only volume handle. If token restriction is constrained, process isolation and strict IPC validation remain mandatory. Raw parser hangs must be detected by a bounded heartbeat/watchdog/timeout, and the broker must terminate the child before fallback. Any crash, out-of-bounds read, or parsing rejection similarly results in worker termination without crashing the broker or compromising the fallback to documented traversal.
 
 ### 9. Raw MFT Invariant Validation and Fail-Closed Acceptance
 
@@ -111,7 +113,7 @@ Before and during processing, the adapter validates:
 - Known NTFS layout assumptions and boot sector geometry;
 - Record signatures, fixup arrays, and sequence numbers;
 - Parent-child directory relationships and acyclic hierarchy invariants;
-- Size accounting rules, including non-negative size values and allocated/logical size boundaries;
+- Size accounting rules requiring non-negative values and format/stream-specific consistency, without assuming Allocated Size is greater than or equal to Logical Size because sparse, compressed, or resident storage may differ;
 - Live consistency markers, employing bounded rereads for records updated during traversal.
 
 If an unsupported layout version, corrupt record structure, inconsistency, or indeterminate Observation Interval is encountered, the raw attempt is immediately rejected. Partially parsed raw records are discarded and never enter the snapshot. The privileged run automatically transitions to the elevated documented traversal adapter, logging and surfacing the fallback event.
@@ -120,12 +122,12 @@ If an unsupported layout version, corrupt record structure, inconsistency, or in
 
 Validated raw MFT records serve as authoritative sources only for:
 - Discovery and volume hierarchy;
-- Object identity and entry name/parent pairings;
+- Object Identity and Directory Entry name/parent pairings;
 - Object kind, standard attributes, and filesystem timestamps;
-- Allocation and logical size evidence for supported stream types;
-- Hard link counts and basic reparse tags with proven semantics.
+- Allocated Size and Logical Size evidence for supported stream types;
+- Hard Link counts and basic Reparse Point tags with proven semantics.
 
-All extended or context-dependent facts—including profile-specific security descriptors, cloud placeholder states, complex alternate streams, content accessibility, EFS encryption status, and ambiguous reparse points—must be resolved through supported Win32 queries with provenance recorded. PigTree will never bypass EFS encryption, alter security permissions to force reads, or infer physical allocation from logical size.
+All extended or context-dependent facts—including profile-specific security descriptors, cloud placeholder states, complex alternate streams, Accessibility, EFS encryption status, and ambiguous Reparse Points—must be resolved through supported Win32 queries with provenance recorded. PigTree will never bypass EFS encryption, alter security permissions to force reads, or infer Allocated Size from Logical Size.
 
 ### 11. Stable-Release Verification Gates
 
@@ -141,9 +143,9 @@ When enabled in production, every raw run continues to execute mandatory invaria
 ### 12. Cross-Filesystem Consistency and Information Model Alignment
 
 The scanning engine adheres to the unified PigTree domain model across NTFS, ReFS, FAT32, and exFAT:
-- Unsupported filesystem features (e.g., hard links on FAT32, compression on exFAT) are recorded as `Not Applicable` with provenance, rather than zero or synthetic values;
+- Unsupported filesystem features (e.g., Hard Links on FAT32, compression on exFAT) are recorded as `Not Applicable` with provenance, rather than zero or synthetic values;
 - Missing or inaccessible metadata is explicitly marked as `Unavailable` with failure reasons;
-- Hard-link accounting requires volume-scoped Object Identity and whole-scope traversal; directory Scan Targets preserve `External Reference Uncertainty` to indicate that links may exist outside the scanned boundary;
+- Hard Link accounting requires volume-scoped Object Identity and whole-scope traversal; directory Scan Targets preserve `External Reference Uncertainty` to indicate that links may exist outside the scanned boundary;
 - Alternate Content Streams are observed only when declared in the active Analysis Profile.
 
 ### 13. Reparse Points, Cloud Storage, and Live Churn Safety
@@ -159,14 +161,14 @@ To prevent infinite recursion, storage corruption, and unexpected network activi
 Progress is communicated through adapter-neutral lifecycle phases: `discovering`, `enriching`, `aggregating`, `validating`, and `finalizing`.
 - Progress metrics report observed items, elapsed time, and denominator confidence; percentage estimates and ETAs are surfaced only when the total denominator is mathematically defensible;
 - User-facing status messages use plain, honest language while preserving exact provenance and diagnostic logs for technical analysis;
-- Cooperative cancellation immediately halts scheduling, cancels outstanding asynchronous I/O, bounds in-flight chunk processing, produces a coherent, immutable partial snapshot, and terminates helper processes without leaking half-decoded records;
+- Cooperative cancellation stops new scheduling promptly, requests cancellation of supported outstanding asynchronous I/O on a best-effort basis, bounds remaining chunk processing and timeouts, finalizes coherent observations into an immutable partial snapshot, and terminates helper processes without leaking half-decoded records;
 - Adapter fallbacks are recorded as explicit lifecycle events containing attempt timestamps, failure reasons, and fallback intervals.
 
 ### 15. Resource Management and Structured Diagnostics
 
 Scanning workers adhere to strict resource bounds:
 - Worker thread pools apply bounded concurrency and backpressure queues;
-- Semantic snapshot output is deterministic and independent of parallel worker completion order;
+- Snapshot aggregation and reduction are deterministic for the same accepted observation set, independent of parallel worker completion order (without implying repeat scans of a changing filesystem yield identical observations);
 - Resource limits enforce memory and handle caps; if limits are reached, the scan slows gracefully or fails honestly rather than dropping observations silently.
 - Local structured diagnostic logs record adapter types, timing benchmarks, entry counts, validation checks, and Coverage Gaps. File paths in diagnostic logs are redacted or hashed by default, and diagnostic data is never transmitted automatically.
 
