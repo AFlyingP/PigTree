@@ -26,6 +26,10 @@ const state = {
   scanEntriesObserved: 48210,
   scanRate: 24500, // entries/sec
   
+  // Sorting state
+  sortField: 'uniqueAllocatedBytes', // 'name' | 'uniqueAllocatedBytes' | 'referencedAllocatedBytes' | 'uniqueLogicalBytes' | 'entryCount' | 'modifiedTime'
+  sortDirection: 'desc', // 'asc' | 'desc'
+
   // Active selection & view
   selectedNodeId: 'node_alex_win11_iso',
   currentViewTab: 'table', // 'table' | 'flat' | 'treemap' | 'types' | 'age' | 'largest'
@@ -36,16 +40,14 @@ const state = {
   filterSizeMin: 0, // 0 = all
   filterType: 'all', // 'all' | 'apps' | 'archives' | 'games' | 'media' | 'system'
   filterAge: 'all', // 'all' | '7d' | '30d' | '1y' | 'older_1y'
-  activeFilterTokens: [
-    { id: 'token_all', label: 'All Items', active: true }
-  ],
   
   // Expanded tree node IDs
   expandedNodes: new Set(['node_root', 'node_users', 'node_user_alex', 'node_alex_downloads']),
   
-  // Cleanup preview modal
+  // Modals
   cleanupModalOpen: false,
   cleanupTargetNode: null,
+  coverageGapModalOpen: false,
   
   // Debug prototype state drawer
   statePanelOpen: false,
@@ -89,6 +91,7 @@ function getAllFlatNodes(root) {
 
 // Find node by ID
 function findNodeById(id, root = MOCK_TREE_ROOT) {
+  if (!id) return null;
   if (id === RECONCILIATION_ITEM.id) return RECONCILIATION_ITEM;
   if (root.id === id) return root;
   if (root.children) {
@@ -140,6 +143,25 @@ function nodeMatchesFilter(node) {
   return true;
 }
 
+// Sorting comparator helper
+function sortNodes(nodes) {
+  const mult = state.sortDirection === 'asc' ? 1 : -1;
+  return [...nodes].sort((a, b) => {
+    let valA = a[state.sortField];
+    let valB = b[state.sortField];
+
+    if (state.sortField === 'name') {
+      valA = (a.name || '').toLowerCase();
+      valB = (b.name || '').toLowerCase();
+      return mult * valA.localeCompare(valB);
+    }
+    
+    valA = valA ?? (a.uniqueAllocatedBytes ?? a.referencedAllocatedBytes ?? 0);
+    valB = valB ?? (b.uniqueAllocatedBytes ?? b.referencedAllocatedBytes ?? 0);
+    return mult * (valA - valB);
+  });
+}
+
 // Update URL with current variant
 function updateUrlVariant(variantKey) {
   state.variant = variantKey;
@@ -170,7 +192,7 @@ export function renderApp() {
         <div class="brand-section">
           <span class="logo-badge">PigTree</span>
           <h1 class="brand-title">PigTree</h1>
-          <span class="brand-tagline">Disk Space & Storage Analyzer</span>
+          <span class="brand-tagline">Disk Space &amp; Storage Analyzer</span>
         </div>
 
         <!-- Scan Target & Analysis Profile Controls -->
@@ -178,9 +200,9 @@ export function renderApp() {
           <div class="control-group">
             <label class="control-label" for="target-select">Target:</label>
             <select id="target-select" class="select-input" aria-label="Select Scan Target">
-              <option value="volume:vol_c" ${state.activeTargetType === 'volume' ? 'selected' : ''}>Local Volume (C:)</option>
+              <option value="volume:vol_c" ${state.activeTargetType === 'volume' ? 'selected' : ''}>Whole Volume: Local Disk (C:)</option>
               <option value="directory:alex_downloads" ${state.activeTargetType === 'directory' ? 'selected' : ''}>Folder: C:\\Users\\Alex\\Downloads</option>
-              <option value="historical:snap_c_prev_month" ${state.activeTargetType === 'historical' ? 'selected' : ''}>Historical Snapshot (C: - March 27, 2025)</option>
+              <option value="historical:snap_c_prev_month" ${state.activeTargetType === 'historical' ? 'selected' : ''}>Saved Snapshot: C:\\ (March 27, 2025)</option>
             </select>
           </div>
 
@@ -192,11 +214,11 @@ export function renderApp() {
           </div>
 
           <button id="btn-scan-action" class="btn btn-primary" aria-label="Start or repeat scan">
-            ${state.scanStatus === 'scanning' ? 'Scanning...' : 'Scan Target'}
+            ${state.scanStatus === 'scanning' ? '⏳ Scanning (' + state.scanProgress + '%)...' : '▶ Start Scan'}
           </button>
           
           <button id="btn-open-historical" class="btn" aria-label="Open saved historical snapshot">
-            Load Snapshot
+            📂 Reopen Snapshot
           </button>
         </div>
       </header>
@@ -204,8 +226,8 @@ export function renderApp() {
       <!-- Historical Snapshot Warning Banner (when viewing historical snapshot) -->
       ${isHistorical ? `
         <div class="historical-banner" role="alert">
-          <span><strong>Historical Snapshot:</strong> Showing observations recorded on March 27, 2025. Facts represent observations during that interval, not live system state.</span>
-          <button id="btn-exit-historical" class="btn btn-sm" aria-label="Return to live volume scan">Switch to Live C:\\</button>
+          <span><strong>🕒 Historical Analysis Snapshot:</strong> Showing observations recorded on March 27, 2025. Reopening does not assert that paths or files still exist or remain current.</span>
+          <button id="btn-exit-historical" class="btn btn-sm" aria-label="Return to live volume scan">Switch to Live Volume</button>
         </div>
       ` : ''}
 
@@ -213,32 +235,34 @@ export function renderApp() {
       <div class="status-strip" role="region" aria-label="Analysis Status">
         <div class="status-indicators">
           <div>
-            <strong>Outcome:</strong> 
-            <span class="status-badge badge-complete">${state.scanStatus.toUpperCase()}</span>
+            <strong>Run Outcome:</strong> 
+            <span class="status-badge ${state.scanStatus === 'finished' ? 'badge-complete' : 'badge-active'}">
+              ${state.scanStatus.toUpperCase()}
+            </span>
           </div>
           <div>
             <strong>Coverage:</strong>
             <span class="status-badge ${currentVolume.coverage === 'complete' ? 'badge-complete' : 'badge-partial'}">
-              ${currentVolume.coverage === 'complete' ? 'COMPLETE' : 'PARTIAL (Coverage Gaps)'}
+              ${currentVolume.coverage === 'complete' ? 'COMPLETE' : 'PARTIAL'}
             </span>
           </div>
           ${currentVolume.coverageGaps.length > 0 ? `
             <div>
               <span class="gap-link" id="view-coverage-gaps" tabindex="0" role="button" aria-label="View Coverage Gaps">
-                ${currentVolume.coverageGaps.length} Coverage Gap: Inaccessible System Area
+                ⚠️ ${currentVolume.coverageGaps.length} Coverage Gap (Inaccessible Path)
               </span>
             </div>
           ` : ''}
           <div>
-            <span style="color: var(--text-dim);">Interval: 42s (~24,500 entries/s) • No atomic snapshot claimed</span>
+            <span style="color: var(--text-dim);">Observed: ${state.scanEntriesObserved.toLocaleString()} entries in 42s (~24,500/s) • No atomic snapshot claimed</span>
           </div>
         </div>
 
-        <div style="font-size: 11px; color: var(--text-muted);">
-          <span>Volume Capacity: <strong>512 GB</strong></span> | 
+        <div style="font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 8px;">
+          <span>Capacity: <strong>512 GB</strong></span> | 
           <span>Used: <strong>392 GB</strong></span> | 
           <span>Accounted: <strong>368 GB</strong></span> | 
-          <span style="color: var(--accent-amber); font-weight: 600;">Unattributed: <strong>24 GB</strong></span>
+          <span style="color: var(--accent-amber); font-weight: 700;">Unattributed: <strong>24 GB</strong></span>
         </div>
       </div>
 
@@ -250,7 +274,7 @@ export function renderApp() {
       <!-- Floating Prototype Variant Switcher (Bottom-Center) -->
       <div class="variant-switcher" role="region" aria-label="Prototype Variant Switcher">
         <button id="btn-var-prev" class="switcher-btn" aria-label="Previous Variant">←</button>
-        <span>Variant:</span>
+        <span>Workflow Variant:</span>
         <span class="switcher-pill">${getVariantDisplayName(state.variant)}</span>
         <button id="btn-var-next" class="switcher-btn" aria-label="Next Variant">→</button>
       </div>
@@ -263,7 +287,7 @@ export function renderApp() {
         ${state.statePanelOpen ? `
           <div class="state-panel-card" role="region" aria-label="Prototype Debug State">
             <div class="panel-header">
-              <span>Prototype In-Memory State</span>
+              <span>In-Memory Prototype State</span>
               <button id="btn-close-state-panel" class="btn btn-sm">✕</button>
             </div>
             <div class="state-json-view" id="state-json-display">
@@ -272,6 +296,9 @@ export function renderApp() {
           </div>
         ` : ''}
       </div>
+
+      <!-- Coverage Gap Explanation Modal -->
+      ${state.coverageGapModalOpen ? renderCoverageGapModal(currentVolume) : ''}
 
       <!-- Guarded Cleanup Modal (if open) -->
       ${state.cleanupModalOpen ? renderCleanupModal() : ''}
@@ -295,6 +322,7 @@ function getDebugState() {
     volumeId: state.activeVolumeId,
     preset: state.activePresetId,
     scanStatus: state.scanStatus,
+    scanProgress: state.scanProgress,
     selectedNodeId: state.selectedNodeId,
     selectedPath: findNodeById(state.selectedNodeId)?.path || 'None',
     filters: {
@@ -303,12 +331,16 @@ function getDebugState() {
       type: state.filterType,
       age: state.filterAge
     },
+    sorting: {
+      field: state.sortField,
+      direction: state.sortDirection
+    },
     coverage: MOCK_VOLUMES.find(v => v.id === state.activeVolumeId)?.coverage,
     reconciliation: {
       capacityBytes: '512 GB',
       usedBytes: '392 GB',
       accountedUniqueBytes: '368 GB',
-      unattributedUsedBytes: '24 GB (Reconciliation difference)'
+      unattributedUsedBytes: '24 GB (Positive Reconciliation Difference)'
     },
     lastAction: state.lastAction
   };
@@ -326,7 +358,7 @@ function renderExplorerVariant() {
       <!-- Left: Folder Tree Navigation -->
       <aside class="explorer-sidebar" aria-label="Directory Tree Navigation">
         <div class="panel-header">
-          <span>Folder Structure</span>
+          <span>Folder Navigation</span>
           <span style="font-weight: normal; font-size: 11px; color: var(--text-dim);">Reachable Scopes</span>
         </div>
         <div class="panel-body tree-view" role="tree" aria-label="Folders">
@@ -358,7 +390,7 @@ function renderExplorerVariant() {
             🏷 File Types
           </button>
           <button class="tab-btn ${state.currentViewTab === 'age' ? 'active' : ''}" data-tab="age" role="tab" aria-selected="${state.currentViewTab === 'age'}">
-            ⏳ Age Distribution
+            ⏳ Age Breakdown
           </button>
           <button class="tab-btn ${state.currentViewTab === 'largest' ? 'active' : ''}" data-tab="largest" role="tab" aria-selected="${state.currentViewTab === 'largest'}">
             🐘 Largest Items
@@ -366,8 +398,8 @@ function renderExplorerVariant() {
         </nav>
 
         <!-- Search and Quick Filter Bar -->
-        <div style="padding: 6px 12px; background: var(--bg-surface); border-bottom: 1px solid var(--border-color); display: flex; gap: 8px; align-items: center;">
-          <input type="search" id="input-explorer-search" class="text-input" placeholder="Search path or name..." value="${state.filterSearch}" style="flex: 1; max-width: 320px;" aria-label="Filter Explorer table by name">
+        <div style="padding: 6px 12px; background: var(--bg-surface); border-bottom: 1px solid var(--border-color); display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <input type="search" id="input-explorer-search" class="text-input" placeholder="Search path or name..." value="${state.filterSearch}" style="flex: 1; min-width: 200px; max-width: 320px;" aria-label="Filter Explorer table by name">
           <select id="select-explorer-size" class="select-input" aria-label="Filter by minimum size">
             <option value="0" ${state.filterSizeMin === 0 ? 'selected' : ''}>All Sizes</option>
             <option value="${1024 * 1024 * 1024}" ${state.filterSizeMin === 1024*1024*1024 ? 'selected' : ''}>&gt; 1 GB</option>
@@ -376,7 +408,7 @@ function renderExplorerVariant() {
           </select>
           <select id="select-explorer-type" class="select-input" aria-label="Filter by file type">
             <option value="all" ${state.filterType === 'all' ? 'selected' : ''}>All File Types</option>
-            <option value="archives" ${state.filterType === 'archives' ? 'selected' : ''}>Archives & ISOs</option>
+            <option value="archives" ${state.filterType === 'archives' ? 'selected' : ''}>Archives &amp; ISOs</option>
             <option value="apps" ${state.filterType === 'apps' ? 'selected' : ''}>Applications (.exe/.dll)</option>
             <option value="games" ${state.filterType === 'games' ? 'selected' : ''}>Game Data (.pak)</option>
             <option value="system" ${state.filterType === 'system' ? 'selected' : ''}>System Files</option>
@@ -390,12 +422,12 @@ function renderExplorerVariant() {
           ${renderActiveViewTab(selectedNode)}
         </div>
 
-        <!-- Synchronized Bottom Treemap Preview when table is shown -->
+        <!-- Synchronized Bottom Treemap Preview when folder table is shown -->
         ${state.currentViewTab === 'table' ? `
           <div class="explorer-subpanel">
             <div class="panel-header">
-              <span>Synchronized Allocation Treemap</span>
-              <span style="font-size: 11px; font-weight: normal; color: var(--text-dim);">Click block to drill down / select</span>
+              <span>Synchronized Treemap Preview</span>
+              <span style="font-size: 11px; font-weight: normal; color: var(--text-dim);">Click block to select / inspect</span>
             </div>
             <div class="panel-body" style="padding: 0;">
               ${renderTreemapSvg(rootNode, 700, 200)}
@@ -418,6 +450,7 @@ function renderExplorerVariant() {
 function renderInsightsVariant() {
   const rootNode = getActiveTargetRoot();
   const selectedNode = findNodeById(state.selectedNodeId) || rootNode;
+  const isHistorical = state.activeTargetType === 'historical';
   
   return `
     <div class="variant-insights-layout">
@@ -432,21 +465,41 @@ function renderInsightsVariant() {
               <span class="insight-metric-highlight">368.0 GB</span>
             </div>
             <p class="insight-explanation">
-              Largest storage consumers on your drive:
+              Major storage areas on your drive:
             </p>
             <ul style="font-size: 12px; padding-left: 18px; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px;">
               <li><strong>Users (Alex):</strong> 107.9 GB allocated (Downloads, Projects, AppData)</li>
-              <li><strong>Games (Starfall):</strong> 68.6 GB allocated in Game assets</li>
-              <li><strong>Windows & System:</strong> 48.2 GB referenced (42.1 GB unique, shared via hard links)</li>
+              <li><strong>Games (Starfall):</strong> 68.6 GB allocated in game assets</li>
+              <li><strong>Windows &amp; System:</strong> 48.2 GB referenced (42.1 GB unique, shared via hard links)</li>
               <li><strong>Virtual Memory / Hibernation:</strong> 28.8 GB (pagefile + hiberfil)</li>
             </ul>
             <div class="insight-actions">
-              <button class="btn btn-sm btn-primary btn-select-node" data-node-id="node_users">Inspect User Files</button>
+              <button class="btn btn-sm btn-primary btn-select-node" data-node-id="node_users">Inspect Users</button>
               <button class="btn btn-sm btn-select-node" data-node-id="node_games">Inspect Games</button>
             </div>
           </div>
 
-          <!-- Card 2: What can I safely review? -->
+          <!-- Card 2: What changed? (Historical comparison) -->
+          <div class="insight-card" style="border-left: 4px solid var(--accent-purple);">
+            <div class="insight-card-header">
+              <span class="insight-question">What changed since last snapshot?</span>
+              <span class="insight-metric-highlight" style="color: var(--accent-purple);">+14.4 GB Net</span>
+            </div>
+            <p class="insight-explanation">
+              ${isHistorical ? 'Historical observation comparison vs current profile baseline:' : 'Differences observed since March 27 snapshot:'}
+            </p>
+            <ul style="font-size: 12px; padding-left: 18px; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px;">
+              <li><strong>+6.2 GB:</strong> New Windows11_Setup_23H2.iso in Downloads</li>
+              <li><strong>+8.2 GB:</strong> Temporary build cache growth in AppData\Local\Temp</li>
+              <li><strong>0 B:</strong> OneDrive cloud archive (placeholder only)</li>
+            </ul>
+            <div class="insight-actions">
+              <button class="btn btn-sm btn-select-node" data-node-id="node_alex_win11_iso">Inspect New ISO</button>
+              <button class="btn btn-sm btn-select-node" data-node-id="node_alex_temp">Inspect Temp Cache</button>
+            </div>
+          </div>
+
+          <!-- Card 3: What can I safely review? -->
           <div class="insight-card" style="border-left: 4px solid var(--accent-teal);">
             <div class="insight-card-header">
               <span class="insight-question">What can I safely review for cleanup?</span>
@@ -467,14 +520,14 @@ function renderInsightsVariant() {
             </div>
           </div>
 
-          <!-- Card 3: Why does disk space not add up? (Unattributed & Inaccessible) -->
+          <!-- Card 4: Why does disk space not add up? (Unattributed & Inaccessible) -->
           <div class="insight-card" style="border-left: 4px solid var(--accent-amber);">
             <div class="insight-card-header">
               <span class="insight-question">Why is there unattributed or inaccessible space?</span>
               <span class="insight-metric-highlight" style="color: var(--accent-amber);">24.0 GB</span>
             </div>
             <p class="insight-explanation">
-              <strong>Unattributed Used Space (24.0 GB):</strong> Physical volume used space exceeds scanned objects due to NTFS metadata, system restore shadow copies, or restricted system areas.
+              <strong>Unattributed Used Space (24.0 GB):</strong> Volume used space exceeds scanned objects due to NTFS metadata, system restore shadow copies, or restricted system areas.
             </p>
             <p class="insight-explanation" style="margin-top: 4px;">
               <strong>System Volume Information:</strong> Inaccessible under standard user context. <em>More access may reveal additional metadata.</em>
@@ -489,38 +542,16 @@ function renderInsightsVariant() {
             </div>
           </div>
 
-          <!-- Card 4: Hard Links & Cloud Placeholders Explained -->
-          <div class="insight-card" style="border-left: 4px solid var(--accent-purple);">
-            <div class="insight-card-header">
-              <span class="insight-question">Hard Links & Cloud Placeholders</span>
-              <span class="insight-metric-highlight" style="color: var(--accent-purple);">6.1 GB shared</span>
-            </div>
-            <p class="insight-explanation">
-              <strong>WinSxS Hard Links:</strong> WinSxS shows 18.5 GB referenced, but only 12.4 GB unique. Files like <code>shell32.dll</code> share object identity with System32 and are not duplicate physical copies.
-            </p>
-            <p class="insight-explanation" style="margin-top: 4px;">
-              <strong>OneDrive Online-Only:</strong> <code>Archive_2024_Backup.zip</code> is 4.8 GB logical size but takes <strong>0 B</strong> physical disk allocation.
-            </p>
-            <div class="insight-actions">
-              <button class="btn btn-sm btn-select-node" data-node-id="node_winsxs_shell32">
-                Inspect shell32.dll Hard Link
-              </button>
-              <button class="btn btn-sm btn-select-node" data-node-id="node_alex_onedrive_zip">
-                Inspect Cloud Placeholder
-              </button>
-            </div>
-          </div>
-
         </div>
 
         <!-- Progressive Detailed Drill-Down Section -->
         <div class="insights-drilldown-section">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
             <h2 style="font-size: 14px; font-weight: 700;">Progressive Storage Explorer</h2>
             <div style="display: flex; gap: 6px;">
               <button class="tab-btn ${state.currentViewTab === 'table' ? 'active' : ''}" data-tab="table">Interactive Table</button>
               <button class="tab-btn ${state.currentViewTab === 'treemap' ? 'active' : ''}" data-tab="treemap">Treemap View</button>
-              <button class="tab-btn ${state.currentViewTab === 'largest' ? 'active' : ''}" data-tab="largest">Largest Items List</button>
+              <button class="tab-btn ${state.currentViewTab === 'largest' ? 'active' : ''}" data-tab="largest">Largest Items</button>
             </div>
           </div>
 
@@ -549,8 +580,8 @@ function renderWorkbenchVariant() {
     <div class="variant-workbench-layout">
       <!-- Expert Command & Filter Bar -->
       <div class="workbench-command-bar" role="toolbar" aria-label="Expert Workbench Command Bar">
-        <span style="font-weight: 700; font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px;">Command / Filter:</span>
-        <input type="search" id="input-workbench-cmd" class="text-input" placeholder="filter path:C:\\Users size:&gt;100MB type:pak,iso links:&gt;1..." value="${state.filterSearch}" style="min-width: 320px; font-family: var(--font-mono); font-size: 11px;" aria-label="Workbench command search">
+        <span style="font-weight: 700; font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px;">Command / Filter:</span>
+        <input type="search" id="input-workbench-cmd" class="text-input" placeholder="filter path:C:\\Users size:&gt;100MB type:pak,iso links:&gt;1..." value="${state.filterSearch}" style="min-width: 280px; font-family: var(--font-mono); font-size: 11px;" aria-label="Workbench command search">
         
         <div class="workbench-filter-tokens" role="group" aria-label="Active Filter Tokens">
           <span class="filter-token ${state.filterSizeMin === 1024*1024*1024 ? 'active' : ''}" data-filter-size="${state.filterSizeMin === 1024*1024*1024 ? '0' : '1073741824'}" tabindex="0" role="button">
@@ -563,7 +594,7 @@ function renderWorkbenchVariant() {
             type:binaries
           </span>
           <span class="filter-token" id="btn-workbench-preset" tabindex="0" role="button">
-            profile:${state.activePresetId}
+            preset:${state.activePresetId}
           </span>
         </div>
 
@@ -579,7 +610,7 @@ function renderWorkbenchVariant() {
         <!-- Center Table Area -->
         <div class="workbench-table-area">
           <div class="panel-header">
-            <span>Configurable Analysis Matrix (Referenced vs Unique Allocation & Entry Counts)</span>
+            <span>Configurable Analysis Matrix (Referenced vs Unique Allocation &amp; Entry Counts)</span>
             <div style="display: flex; gap: 8px;">
               <span style="font-size: 11px;">Active Target: <code>${rootNode.path}</code></span>
               <span style="font-size: 11px; color: var(--text-dim);">Selected: <code>${selectedNode.name || selectedNode.path}</code></span>
@@ -595,7 +626,7 @@ function renderWorkbenchVariant() {
         <aside class="workbench-side-panels">
           <div class="panel-header">
             <span>Visual Spatial Allocation</span>
-            <span style="font-size: 10px; color: var(--text-dim);">Squarified Treemap</span>
+            <span style="font-size: 10px; color: var(--text-dim);">Proportional Treemap</span>
           </div>
           <div style="height: 180px; background: var(--bg-app); border-bottom: 1px solid var(--border-color);">
             ${renderTreemapSvg(rootNode, 360, 180)}
@@ -659,25 +690,31 @@ function renderTreeNode(node, depth = 0) {
 function renderFolderTableView(scopeNode) {
   const children = scopeNode.children || [scopeNode];
   const filteredChildren = children.filter(nodeMatchesFilter);
+  const sortedChildren = sortNodes(filteredChildren);
+
+  const sortIndicator = (field) => {
+    if (state.sortField !== field) return '';
+    return state.sortDirection === 'asc' ? ' ▲' : ' ▼';
+  };
 
   return `
     <div class="data-table-container">
       <table class="data-table" role="table" aria-label="Directory Entries Table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th class="cell-mono">Unique Allocated</th>
-            <th class="cell-mono">Referenced Allocated</th>
-            <th class="cell-mono">Logical Size</th>
-            <th class="cell-mono">Entries</th>
-            <th class="cell-mono">Unique Objects</th>
+            <th data-sort-field="name">Name${sortIndicator('name')}</th>
+            <th data-sort-field="uniqueAllocatedBytes" class="cell-mono">Unique Allocated${sortIndicator('uniqueAllocatedBytes')}</th>
+            <th data-sort-field="referencedAllocatedBytes" class="cell-mono">Referenced Allocated${sortIndicator('referencedAllocatedBytes')}</th>
+            <th data-sort-field="uniqueLogicalBytes" class="cell-mono">Logical Size${sortIndicator('uniqueLogicalBytes')}</th>
+            <th data-sort-field="entryCount" class="cell-mono">Entries${sortIndicator('entryCount')}</th>
+            <th data-sort-field="uniqueObjectCount" class="cell-mono">Unique Objects${sortIndicator('uniqueObjectCount')}</th>
             <th>Kind / Category</th>
             <th>Status / Coverage</th>
-            <th>Modified Date</th>
+            <th data-sort-field="modifiedTime">Modified Date${sortIndicator('modifiedTime')}</th>
           </tr>
         </thead>
         <tbody>
-          ${filteredChildren.map(child => {
+          ${sortedChildren.map(child => {
             const isSel = state.selectedNodeId === child.id;
             return `
               <tr class="${isSel ? 'selected' : ''}" data-node-id="${child.id}" role="row" tabindex="0">
@@ -729,24 +766,23 @@ function renderFolderTableView(scopeNode) {
 function renderFlatFilesTableView() {
   const rootNode = getActiveTargetRoot();
   const allNodes = getAllFlatNodes(rootNode).filter(n => n.kind === 'file' || n.kind === 'special').filter(nodeMatchesFilter);
-  // Sort descending by allocated size
-  allNodes.sort((a, b) => (b.referencedAllocatedBytes || 0) - (a.referencedAllocatedBytes || 0));
+  const sortedFiles = sortNodes(allNodes);
 
   return `
     <div class="data-table-container">
       <table class="data-table" role="table" aria-label="Flat Files Table">
         <thead>
           <tr>
-            <th>File Name & Observed Path</th>
-            <th class="cell-mono">Allocated Size</th>
-            <th class="cell-mono">Logical Size</th>
+            <th data-sort-field="name">File Name &amp; Observed Path</th>
+            <th data-sort-field="referencedAllocatedBytes" class="cell-mono">Allocated Size</th>
+            <th data-sort-field="referencedLogicalBytes" class="cell-mono">Logical Size</th>
             <th>Characteristics</th>
-            <th>Modified Date</th>
+            <th data-sort-field="modifiedTime">Modified Date</th>
             <th>Action Preview</th>
           </tr>
         </thead>
         <tbody>
-          ${allNodes.map(file => {
+          ${sortedFiles.map(file => {
             const isSel = state.selectedNodeId === file.id;
             return `
               <tr class="${isSel ? 'selected' : ''}" data-node-id="${file.id}" role="row" tabindex="0">
@@ -793,7 +829,7 @@ function renderLargestItemsView() {
         <thead>
           <tr>
             <th>Rank</th>
-            <th>Item Name & Path</th>
+            <th>Item Name &amp; Path</th>
             <th class="cell-mono">Allocated Physical Size</th>
             <th class="cell-mono">Logical Size</th>
             <th>Safety / Clean Risk</th>
@@ -940,15 +976,16 @@ function renderAgeDistributionView() {
 // Workbench Expert Table (Dense Grid with all metadata)
 function renderWorkbenchExpertTable(rootNode) {
   const allNodes = getAllFlatNodes(rootNode).filter(nodeMatchesFilter);
+  const sortedNodes = sortNodes(allNodes);
 
   return `
     <table class="data-table" role="table" aria-label="Dense Expert Table">
       <thead>
         <tr>
-          <th>Entry Name & Observed Path</th>
-          <th class="cell-mono">Unique Alloc (B)</th>
-          <th class="cell-mono">Ref Alloc (B)</th>
-          <th class="cell-mono">Logical (B)</th>
+          <th data-sort-field="name">Entry Name &amp; Observed Path</th>
+          <th data-sort-field="uniqueAllocatedBytes" class="cell-mono">Unique Alloc (B)</th>
+          <th data-sort-field="referencedAllocatedBytes" class="cell-mono">Ref Alloc (B)</th>
+          <th data-sort-field="uniqueLogicalBytes" class="cell-mono">Logical (B)</th>
           <th class="cell-mono">Links</th>
           <th>Object ID</th>
           <th>Storage Characteristics</th>
@@ -957,7 +994,7 @@ function renderWorkbenchExpertTable(rootNode) {
         </tr>
       </thead>
       <tbody>
-        ${allNodes.map(node => {
+        ${sortedNodes.map(node => {
           const isSel = state.selectedNodeId === node.id;
           const obj = node.objectId ? MOCK_OBJECTS[node.objectId] : null;
           return `
@@ -979,7 +1016,7 @@ function renderWorkbenchExpertTable(rootNode) {
                   ${obj?.storageCharacteristics?.join(', ') || node.category || 'standard'}
                 </span>
               </td>
-              <td style="font-size: 11px; color: var(--text-dim);">${obj?.owner || 'Observed Entry'}</td>
+              <td style="font-size: 11px; color: var(--text-dim);">${obj?.owner || 'Observed Principal'}</td>
               <td>
                 <span class="status-badge ${node.observationStatus === 'inaccessible' ? 'badge-partial' : 'badge-complete'}">
                   ${node.observationStatus || 'observed'}
@@ -1159,7 +1196,7 @@ function renderDetailInspector(node) {
         <div class="inspector-section">
           <span class="inspector-section-title">Reconciliation Difference</span>
           <div class="fact-row">
-            <span class="fact-label">Magnitude:</span>
+            <span class="fact-label">Discrepancy Magnitude:</span>
             <span class="fact-value" style="color: var(--accent-amber); font-size: 14px;">24.0 GB</span>
           </div>
           <div class="fact-row">
@@ -1167,7 +1204,7 @@ function renderDetailInspector(node) {
             <span class="fact-value">392.0 GB</span>
           </div>
           <div class="fact-row">
-            <span class="fact-label">Accounted Unique Alloc:</span>
+            <span class="fact-label">Accounted Unique Allocation:</span>
             <span class="fact-value">368.0 GB</span>
           </div>
         </div>
@@ -1175,15 +1212,15 @@ function renderDetailInspector(node) {
         <div class="inspector-section">
           <span class="inspector-section-title">Explanation</span>
           <p style="font-size: 12px; color: var(--text-muted); line-height: 1.4;">
-            This 24.0 GB discrepancy represents storage reported as used by Windows NTFS that PigTree cannot defensibly attribute to individual observed filesystem objects.
+            This 24.0 GB discrepancy represents Used Space reported by the filesystem that PigTree cannot defensibly attribute to individual observed filesystem objects.
           </p>
           <p style="font-size: 12px; color: var(--text-muted); line-height: 1.4; margin-top: 6px;">
-            Common causes include:
+            Causes include:
           </p>
           <ul style="font-size: 11px; padding-left: 16px; color: var(--text-dim); margin-top: 4px;">
-            <li>NTFS Master File Table ($MFT) and metadata logs</li>
-            <li>Inaccessible System Volume Information shadow copies</li>
-            <li>Live filesystem allocations that shifted during scan</li>
+            <li>NTFS Master File Table ($MFT) and filesystem metadata</li>
+            <li>Inaccessible System Volume Information (shadow copies/restore points)</li>
+            <li>Live filesystem allocations that shifted during traversal</li>
           </ul>
         </div>
       </div>
@@ -1214,7 +1251,7 @@ function renderDetailInspector(node) {
           <span class="fact-value" style="font-size: 11px;">${node.path}</span>
         </div>
         <div class="fact-row">
-          <span class="fact-label">Classification:</span>
+          <span class="fact-label">Entry Classification:</span>
           <span class="fact-value">${node.category || node.kind}</span>
         </div>
         <div class="fact-row">
@@ -1286,7 +1323,7 @@ function renderDetailInspector(node) {
 
       <!-- Section 5: Observation Status & Value Knowledge -->
       <div class="inspector-section">
-        <span class="inspector-section-title">4. Observation & Knowledge State</span>
+        <span class="inspector-section-title">4. Observation &amp; Knowledge State</span>
         <div class="fact-row">
           <span class="fact-label">Observation Status:</span>
           <span class="fact-value">${node.observationStatus || 'observed'}</span>
@@ -1306,6 +1343,54 @@ function renderDetailInspector(node) {
         <button class="btn btn-primary btn-open-cleanup" data-node-id="${node.id}" style="width: 100%;">
           🛡 Review Guarded Cleanup Action Plan
         </button>
+      </div>
+    </div>
+  `;
+}
+
+// -------------------------------------------------------------
+// Coverage Gap Explanation Modal
+// -------------------------------------------------------------
+function renderCoverageGapModal(volume) {
+  const gap = volume.coverageGaps[0] || {
+    path: 'C:\\System Volume Information',
+    reason: 'STATUS_ACCESS_DENIED under current security context',
+    defensibleBound: 'Unknown allocation; volume shadow copies & system restore points reside here.',
+    noncommittalPrompt: 'Additional security privileges or backup-intent read may reveal more metadata.'
+  };
+
+  return `
+    <div class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-gap-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="modal-title" id="modal-gap-title">⚠️ Coverage Gap Details</h3>
+          <button id="btn-close-gap-modal" class="btn btn-sm" aria-label="Close dialog">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="background: var(--accent-amber-bg); border: 1px solid var(--accent-amber); padding: 12px; border-radius: var(--radius-sm);">
+            <strong>Inaccessible Scope:</strong> <code>${gap.path}</code><br>
+            <strong>Observation Status:</strong> <span class="status-badge badge-partial">INACCESSIBLE</span><br>
+            <div style="margin-top: 6px; font-size: 12px;"><strong>Reason:</strong> ${gap.reason}</div>
+          </div>
+
+          <div style="font-size: 12px; color: var(--text-muted); line-height: 1.4;">
+            <strong>Accounting Impact &amp; Known Subtotals:</strong><br>
+            Because this scope was inaccessible, its allocated and logical sizes are recorded as <em>Unavailable</em> rather than zero. 
+            The volume's Accounted Unique Allocation (368 GB) is a <em>Known Subtotal</em> that omits these unobserved entries.
+          </div>
+
+          <div style="font-size: 12px; color: var(--text-muted); line-height: 1.4;">
+            <strong>Defensible Bounds:</strong><br>
+            ${gap.defensibleBound}
+          </div>
+
+          <div style="background: var(--bg-subtle); padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-size: 12px;">
+            💡 <em>${gap.noncommittalPrompt}</em>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-dismiss-gap-modal" class="btn btn-primary">Understood</button>
+        </div>
       </div>
     </div>
   `;
@@ -1360,7 +1445,7 @@ function renderCleanupModal() {
 
           <!-- Uncertainty & Accounting Notice -->
           <div style="font-size: 12px; color: var(--text-muted); line-height: 1.4;">
-            <strong>Accounting & Uncertainty Analysis:</strong> ${uncertaintyNote}
+            <strong>Accounting &amp; Uncertainty Analysis:</strong> ${uncertaintyNote}
           </div>
 
           <!-- Remediation Guidance -->
@@ -1373,7 +1458,7 @@ function renderCleanupModal() {
           ` : (node.cleanupSafe === 'native_uninstall' ? `
             <div style="background-color: var(--accent-amber-bg); border: 1px solid var(--accent-amber); padding: 10px; border-radius: var(--radius-sm); color: var(--accent-amber); font-size: 12px;">
               <strong>💡 Recommended Remediation:</strong><br>
-              This is an installed application / game package. Recommended action is using Windows Settings → Installed Apps or the Steam launcher to perform a clean native uninstallation.
+              This is an installed application / game package. Recommended action is using Windows Settings → Installed Apps or the game launcher to perform a clean native uninstallation.
             </div>
           ` : `
             <div style="background-color: #dcfce7; border: 1px solid #15803d; padding: 10px; border-radius: var(--radius-sm); color: #15803d; font-size: 12px;">
@@ -1461,18 +1546,29 @@ function attachEventListeners() {
     };
   }
 
-  // Scan action button
+  // Scan action button with progress animation simulation
   const btnScan = document.getElementById('btn-scan-action');
   if (btnScan) {
     btnScan.onclick = () => {
+      if (state.scanStatus === 'scanning') return;
       state.scanStatus = 'scanning';
+      state.scanProgress = 15;
+      state.scanEntriesObserved = 7200;
       renderApp();
       recordAction('Started scan traversal');
-      setTimeout(() => {
-        state.scanStatus = 'finished';
-        recordAction('Completed scan traversal');
+      
+      const interval = setInterval(() => {
+        state.scanProgress += 25;
+        state.scanEntriesObserved += 10250;
+        if (state.scanProgress >= 100) {
+          clearInterval(interval);
+          state.scanProgress = 100;
+          state.scanEntriesObserved = 48210;
+          state.scanStatus = 'finished';
+          recordAction('Completed scan traversal');
+        }
         renderApp();
-      }, 600);
+      }, 150);
     };
   }
 
@@ -1496,6 +1592,21 @@ function attachEventListeners() {
       renderApp();
     };
   }
+
+  // Table sorting headers
+  document.querySelectorAll('th[data-sort-field]').forEach(th => {
+    th.onclick = () => {
+      const field = th.getAttribute('data-sort-field');
+      if (state.sortField === field) {
+        state.sortDirection = state.sortDirection === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.sortField = field;
+        state.sortDirection = 'desc';
+      }
+      recordAction(`Sorted table by ${field} (${state.sortDirection})`);
+      renderApp();
+    };
+  });
 
   // View tab buttons
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -1552,11 +1663,15 @@ function attachEventListeners() {
   const gapLink = document.getElementById('view-coverage-gaps');
   if (gapLink) {
     gapLink.onclick = () => {
-      state.selectedNodeId = 'node_sysvolinfo';
-      recordAction('Selected System Volume Information coverage gap');
+      state.coverageGapModalOpen = true;
+      recordAction('Opened Coverage Gap explanation modal');
       renderApp();
     };
   }
+  const btnCloseGap = document.getElementById('btn-close-gap-modal');
+  const btnDismissGap = document.getElementById('btn-dismiss-gap-modal');
+  if (btnCloseGap) btnCloseGap.onclick = () => { state.coverageGapModalOpen = false; renderApp(); };
+  if (btnDismissGap) btnDismissGap.onclick = () => { state.coverageGapModalOpen = false; renderApp(); };
 
   // Filter Search Input in Explorer
   const explorerSearch = document.getElementById('input-explorer-search');
@@ -1650,6 +1765,14 @@ function attachEventListeners() {
     };
   }
 
+  const btnRemediateNative = document.getElementById('btn-remediate-native');
+  if (btnRemediateNative) {
+    btnRemediateNative.onclick = () => {
+      alert(`Windows native cleanup tool guidance shown: Launch Cleanmgr.exe or DISM component cleanup.`);
+      closeModal();
+    };
+  }
+
   // Toggle Prototype State Debug Panel
   const btnToggleState = document.getElementById('btn-toggle-state-panel');
   if (btnToggleState) {
@@ -1706,6 +1829,10 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === 'Escape') {
     if (state.cleanupModalOpen) {
       closeModal();
+    }
+    if (state.coverageGapModalOpen) {
+      state.coverageGapModalOpen = false;
+      renderApp();
     }
   }
 });
