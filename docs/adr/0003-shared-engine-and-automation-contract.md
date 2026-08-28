@@ -36,13 +36,13 @@ The shared engine exposes a transport-neutral, task-level interface. The contrac
 #### Shared Domain Capabilities
 Graphical and command-line interfaces share identical domain capabilities through the engine seam:
 - **Analyze**: Execute time-bounded Analysis Runs against Volume or directory Scan Targets under declared Analysis Profiles.
-- **Snapshot**: Construct, save, open, and migrate immutable Analysis Snapshots and Snapshot Enrichments.
+- **Snapshot**: Construct, save, open, and migrate immutable Analysis Snapshots and Snapshot Enrichments. Opening an artifact loads that immutable record; an Artifact View is explicitly assembled from an exact base snapshot plus an ordered sequence of enrichments rather than constructed silently on open.
 - **Query**: Execute typed filters, sorts, groupings, and aggregations across declared Query Grains on explicit Artifact Views.
-- **Duplicate Discovery and Verification**: Generate non-content Duplicate Candidate Sets and execute separate, byte-verified Duplicate Verification operations.
+- **Duplicate Discovery and Verification**: Generate non-content Duplicate Candidate Sets and execute separate Duplicate Verification operations that prove every content-bearing stream under a declared Verification Method and Verification Scope.
 - **Action Plan Formulation and Validation**: Create, validate, inspect, and export immutable Action Plans with live risk assessment and reclaim accounting.
 - **Action Execution**: Execute validated Action Plans under strict Live Preflight, step journaling, and Commit Point governance.
-- **Execution Recovery**: Inspect Execution Records and execute plan-authorized recovery actions for preserved Recovery Artifacts.
-- **Artifact Export and Import**: Export and import self-describing, integrity-manifested artifacts with optional Redaction Profiles.
+- **Execution Recovery**: Inspect Execution Records and execute an exact, immutable recovery Action Plan for preserved Recovery Artifacts (not a direct restore primitive).
+- **Artifact Export and Import**: Export and import self-describing, integrity-manifested artifacts with optional Redaction Profiles. Imported or foreign Action Plans carry evidence only and require a newly created, locally bound Action Plan before execution.
 - **Capability Discovery**: Inspect supported contract versions, command schemas, platform adapters, and operational constraints.
 
 Presentation-specific concerns--including treemap layout tiling, zoom coordinates, viewport clipping, sorting column visual order, theme colors, and UI selection state--are strictly client-side concepts and are prohibited from entering the engine seam, artifacts, or query algebra.
@@ -61,18 +61,24 @@ Every long-running Engine Operation receives a unique, opaque Operation ID and t
                    +---------> [Finished] -------------------> [Settled]
 ```
 
+#### Target Effect and Mutation Scope Distinction
+The engine contract strictly distinguishes operations that mutate analyzed filesystem state from those that write internal storage or operate read-only:
+- **Analyzed Filesystem Mutation**: Only Action Execution (`execution.run`, `execution.recover`) mutates analyzed filesystem targets (such as removing directory entries, executing native deletions, or replacing hard links). All other command families leave analyzed filesystem state untouched.
+- **Artifact Storage and Export Writes**: Snapshot persistence (`snapshot.save`, `snapshot.migrate`) and artifact packaging (`artifact.export`, `artifact.import`) write only to PigTree-owned artifact storage or an explicitly selected export destination; they do not alter analyzed filesystem targets.
+- **Read-Only Operations**: Analysis traversal, query execution, duplicate candidate discovery, content stream verification, and plan formulation/validation read analyzed filesystem targets or stored artifacts without mutating either.
+
 #### Normative Command Family Table
 
-| Command Family | Primary Commands | Mutating / Read-Only | Long-Running / Operation | Primary Output / Artifact |
+| Command Family | Primary Commands | Target Effect / Mutation Scope | Long-Running / Operation | Primary Output / Artifact |
 |---|---|---|---|---|
-| **Analysis** | `analysis.start`, `analysis.cancel` | Read-Only | Yes (`AnalysisRun`) | `AnalysisSnapshot` (Complete or Partial) |
-| **Snapshot** | `snapshot.open`, `snapshot.save`, `snapshot.migrate`, `snapshot.inspect` | Read-Only | Open/Inspect: No; Migrate: Yes | `ArtifactView` / Migrated `AnalysisSnapshot` |
-| **Query** | `query.execute`, `query.explain` | Read-Only | No (Paged / Chunked) | Typed Query Result Set + Provenance |
-| **Duplicates** | `duplicates.candidates`, `duplicates.verify`, `duplicates.cancel` | Read-Only | Candidates: No; Verify: Yes | `SnapshotEnrichment` (Verification Evidence) |
-| **Plan** | `plan.create`, `plan.validate`, `plan.show`, `plan.export` | Read-Only | Validate: Yes (Live Observation) | Immutable `ActionPlan` |
-| **Execution** | `execution.run`, `execution.cancel`, `execution.recover` | **Mutating** | Yes (`ActionExecution`) | Immutable `ExecutionRecord` |
-| **Artifact** | `artifact.export`, `artifact.import`, `artifact.verify` | Read-Only | Yes (for large packages) | Export Package / Verified Artifact |
-| **Capability** | `engine.capabilities`, `engine.diagnostics` | Read-Only | No | `CapabilityReport` / Diagnostics |
+| **Analysis** | `analysis.start`, `analysis.cancel` | Analyzed filesystem read-only (No target mutation) | Yes (`AnalysisRun`) | `AnalysisSnapshot` (Complete or Partial) |
+| **Snapshot** | `snapshot.open`, `snapshot.save`, `snapshot.migrate`, `snapshot.inspect` | PigTree artifact storage write (`save`/`migrate`) or read (`open`/`inspect`); Analyzed filesystem untouched | Open/Inspect: No; Migrate: Yes | Loaded `AnalysisSnapshot` / `SnapshotEnrichment` / Migrated Snapshot |
+| **Query** | `query.execute`, `query.explain` | Read-only query over explicit `ArtifactView`; Analyzed filesystem untouched | No (Paged / Chunked) | Typed Query Result Set + Provenance |
+| **Duplicates** | `duplicates.candidates`, `duplicates.verify`, `duplicates.cancel` | Candidates: Read-only over `ArtifactView`; Verify: Read-only stream inspection on analyzed filesystem | Candidates: No; Verify: Yes | `SnapshotEnrichment` (Verification Evidence) |
+| **Plan** | `plan.create`, `plan.validate`, `plan.show`, `plan.export` | Read-only formulation and live preflight preview; Analyzed filesystem untouched | Validate: Yes (Live Observation) | Immutable `ActionPlan` |
+| **Execution** | `execution.run`, `execution.cancel`, `execution.recover` | **Mutates Analyzed Filesystem State**; Writes recovery artifacts & execution records | Yes (`ActionExecution`) | Immutable `ExecutionRecord` |
+| **Artifact** | `artifact.export`, `artifact.import`, `artifact.verify` | Writes export destination or reads/writes PigTree artifact storage; Analyzed filesystem untouched | Yes (for large packages) | Export Package / Verified Artifact |
+| **Capability** | `engine.capabilities`, `engine.diagnostics` | Read-only engine introspection; Analyzed filesystem untouched | No | `CapabilityReport` / Diagnostics |
 
 ### 3. Dual Logical Channels and Common Event Envelope
 
@@ -83,8 +89,8 @@ Every active Engine Operation exposes two distinct, ordered logical output chann
 #### Common Operation Event Envelope
 Every event emitted across either channel adheres to a standard, versioned envelope containing:
 - `operation_id`: Opaque identifier of the initiating Engine Operation.
-- `sequence_number`: Monotonically increasing 64-bit integer scoped strictly to the operation.
-- `timestamp`: Unambiguous UTC timestamp (ISO 8601 / RFC 3339 format).
+- `sequence_number`: Monotonically increasing sequence number scoped strictly to the operation.
+- `timestamp`: Unambiguous UTC instant.
 - `schema_version`: Semantic version of the event schema.
 - `phase`: Current lifecycle phase (`discovering`, `enriching`, `aggregating`, `validating`, `preflighting`, `executing`, `finalizing`).
 - `channel`: Logical channel (`data` or `progress`).
@@ -93,6 +99,9 @@ Every event emitted across either channel adheres to a standard, versioned envel
 - `provenance`: Adapter or engine subsystem responsible for the event.
 
 Progress payloads report observed work, completed units, elapsed time, resource usage, active stage technical and plain-language labels, fallback/retry counts, and Coverage Gaps. **Denominators, percentages, and estimated times of arrival (ETAs) are included only when mathematically defensible and accompanied by an explicit denominator confidence rating.** When total volume size or entry count is unknown, the engine reports observed totals without synthetic percentage approximations.
+
+#### Operation Replay Retention
+The engine maintains a bounded event replay retention window for active and recently settled Engine Operations. Clients and reconnecting subscribers can query or replay events from a specified monotonic sequence number to recover dropped event context without restarting the underlying operation.
 
 ### 4. Terminal Run Outcomes, Cancellation, and Partial Results
 
@@ -104,12 +113,12 @@ The engine strictly separates three orthogonal concepts:
 - **Artifact Usability and Integrity**: Whether the resulting data structures are self-consistent, uncorrupted, and valid for querying.
 - **Coverage**: How completely the Scan Target was observed relative to the declared Analysis Profile (`complete`, `partial`, or `indeterminate`).
 
-An operation that terminates with `cancelled` or `failed` may still publish a fully valid, self-consistent **Partial Analysis Snapshot**. Such snapshots retain their exact Run Outcome, partial Coverage, recorded Coverage Gaps, Observation Interval, and incomplete aggregates. Reopening or querying a partial snapshot never synthesizes missing values or upgrades Coverage.
+An operation that terminates with `cancelled` or `failed` may still publish a fully valid, self-consistent **Partial Analysis Snapshot** when salvageable observations exist. Such snapshots retain their exact Run Outcome, partial Coverage, recorded Coverage Gaps, Observation Interval, and incomplete aggregates. Reopening or querying a partial snapshot never synthesizes missing values or upgrades Coverage.
 
 #### Cancellation Semantics
 - **Idempotency**: A cancellation request (`analysis.cancel`, `duplicates.cancel`, `execution.cancel`) is idempotent. Repeated requests for an in-flight or already settled operation return immediate confirmation.
-- **Read-Only Operations**: Immediately halt scheduling new traversal or I/O, cancel outstanding asynchronous platform queries where supported, flush in-flight completed observations into a coherent partial snapshot, and transition from `stopping` to `cancelled`.
-- **Duplicate Verification**: Halts byte comparisons immediately, discards in-flight unverified comparisons, records verified subset enrichments up to the cancellation boundary, and settles with unverified candidates marked as `unverified_due_to_cancellation`. Partially verified candidates are never upgraded to Verified Duplicate Sets.
+- **Read-Only Operations**: Immediately halt scheduling new traversal or I/O, cancel outstanding asynchronous platform queries where supported, flush in-flight completed observations into a coherent partial snapshot if salvageable, and transition from `stopping` to `cancelled`.
+- **Duplicate Verification**: Halts stream verification immediately, discards in-flight unverified comparisons, records verified subset enrichments up to the cancellation boundary, and settles with unverified candidates marked as `unverified_due_to_cancellation`. Partially verified candidates are never upgraded to Verified Duplicate Sets.
 - **Action Execution**: Upon accepting a cancellation request, the executor transitions to `stopping` and executes no new operations. For the currently in-flight operation:
   - If execution has not reached its operation-specific **Commit Point**, execution halts immediately without attempting the mutation.
   - If execution is at or beyond the Commit Point, the operation must run to a verified outcome or execute plan-authorized step recovery.
@@ -124,18 +133,19 @@ All long-lived engine data is stored in immutable, kind-versioned, content-manif
 | Artifact Kind | Immutability | Dependencies and Lineage | Primary Contents | Mutation Authority |
 |---|---|---|---|---|
 | **Analysis Snapshot** | Immutable | Scan Target, Analysis Profile, Volume Identity, Observation Interval | Directory Entry tree, Filesystem Object graph, Content Streams, sizes, timestamps, attributes, Coverage, Coverage Gaps | None (Read-only evidence) |
-| **Snapshot Enrichment** | Immutable (Append-only) | Base `AnalysisSnapshot` ID + Version, Observation Interval | Verified Duplicate Sets, Verification Methods/Scopes, targeted re-observations, hash evidence | None (Read-only evidence) |
+| **Snapshot Enrichment** | Immutable (Append-only) | Base `AnalysisSnapshot` ID + Version, Observation Interval | Verified Duplicate Sets, Verification Methods/Scopes, targeted re-observations, verification evidence | None (Read-only evidence) |
 | **Artifact View** | Virtual / Declared | Base `AnalysisSnapshot` + Ordered compatible `SnapshotEnrichment` list | Unified logical presentation of base snapshot overlaid with specific enrichments | None (Read-only query target) |
-| **Action Plan** | Immutable | Source `ArtifactView`, Preconditions, Reclaim Analysis, Security Context | Target entry paths, Object Identities, requested mutations, Recovery Classes, Action Risk Classes, Keeper pairings | Authority for Live Preflight and Execution |
+| **Action Plan** | Immutable | Source `ArtifactView`, Preconditions, Reclaim Analysis, Security Context | Target entry paths, Object Identities, requested mutations, Recovery Classes, Action Risk Classes, Keeper pairings | Authority for Live Preflight and Execution (when locally bound) |
 | **Execution Record** | Immutable | Source `ActionPlan` ID + Integrity Digest, Execution Interval | Live preflight observations, Commit Points, per-step outcomes, native platform results, Recovery Artifact references | None (Historical audit and recovery evidence) |
 | **Export Package** | Immutable | Source Artifact IDs, Redaction Profile (if applied), Package Digest | Self-contained domain data, integrity manifests, provenance, Coverage metadata, optional rebuildable indexes | Governed by contained artifacts |
 
 #### Versioning, Persistence, and Compatibility Rules
-- **Contract Versioning**: The engine contract adheres to Semantic Versioning (`major.minor.patch`). Minor updates are strictly additive (new optional fields, additional query operators, non-breaking diagnostic categories). Breaking schema changes, removed fields, or altered semantics require a major version bump.
-- **Fail-Closed Principle**: Engine clients and parsers must fail closed when encountering unknown required fields, unknown command verbs, unknown Action Risk Classes, unknown Recovery Classes, or unsupported artifact schema major versions. Unknown enum values must never default silently to a known value.
-- **Lineage Integrity**: Every artifact embeds an integrity digest (such as SHA-256) covering its entire payload and explicitly declares the IDs and digests of all ancestor artifacts.
-- **Schema Migration**: Opening an older supported snapshot version never mutates the original on-disk artifact. Migration executes as an explicit operation producing a new versioned artifact with recorded lineage to the original.
-- **Degraded Read-Only Opening**: If an artifact has localized corruption or unsupported non-critical sections, the engine may open independently coherent, verified sections in degraded read-only mode, recording explicit Coverage Gaps. Mutation planning is strictly prohibited against degraded or corrupted artifacts until fresh observations resolve all gaps.
+- **Contract Versioning**: The engine contract adheres to Semantic Versioning (`major.minor.patch`). Minor updates are strictly additive (introducing new optional fields, additional query operators, non-breaking diagnostic categories, optional capability flags). Breaking schema changes, removed fields, or altered semantics require a major version bump.
+- **Fail-Closed vs. Fail-Safe Unknown Elements**: Engine clients and parsers must fail closed when encountering unknown required fields, unknown command verbs, unknown Action Risk Classes, unknown Recovery Classes, or unsupported artifact schema major versions. Unknown optional fields in minor schema versions must be safely accepted or ignored to preserve forward compatibility. Unknown enum values in required fields must never default silently to a known value.
+- **Lineage Integrity**: Every artifact embeds an integrity digest under a declared cryptographic integrity algorithm covering its entire payload and explicitly declares the IDs and digests of all ancestor artifacts.
+- **Schema Migration**: Opening an older supported snapshot version never mutates the original on-disk artifact. Migration executes as an explicit, non-destructive operation producing a new versioned artifact with recorded lineage to the original source.
+- **Degraded Read-Only Opening**: If an artifact has localized corruption or unsupported non-critical sections, the engine may open independently coherent, verified sections in degraded read-only mode, recording explicit Coverage Gaps. Mutation planning is strictly prohibited against degraded or corrupted artifacts until fresh live observations resolve all gaps.
+- **Artifact Packages and Import Trust**: Export Packages bundle one or more immutable artifacts alongside a declared integrity manifest that covers all included artifacts and their lineage records. Imported or foreign Action Plans carry evidence only and possess zero execution authority; executing actions in the local environment requires compiling and validating a newly created, locally bound immutable Action Plan under the local security context.
 
 ### 6. Typed Query Algebra, Query Grain, and Value Knowledge Semantics
 
@@ -154,7 +164,7 @@ Every query submitted to `query.execute` explicitly declares:
 - **Predicates**: Composable boolean expressions over attributes, sizes, timestamps, classifications, risk classes, and entry depths.
 - **Aggregations**: Computations of totals, counts, distributions, or histograms, explicitly declaring `referenced` vs. `unique` accounting rules and root/kind inclusion.
 - **Ordering**: Total, deterministic sort order with stable tie-breakers (e.g., secondary sort by Object Identity).
-- **Pagination**: Zero-based offset/limit or opaque continuation tokens bound to normalized query fingerprints.
+- **Pagination**: Zero-based offset/limit or opaque continuation tokens bound to normalized query fingerprints (predicates, ordering, grain, projection) and the exact source Artifact View revision/digest to prevent token reuse across mismatched queries or changed data.
 
 #### Three-Valued Logic and Knowledge Policy
 Field evaluations follow three-valued logic (`match`, `no_match`, `unknown`). The query's **Knowledge Policy** explicitly governs how `unknown` evaluations behave:
@@ -169,8 +179,8 @@ Field evaluations follow three-valued logic (`match`, `no_match`, `unknown`). Th
 Duplicate remediation requires strict separation between heuristic grouping and bit-for-bit content verification:
 
 ```
-[Analysis Snapshot] ---> [Duplicate Candidates] ---> [Typed Verification] ---> [Verified Duplicate Set]
-(Metadata Evidence)     (Non-Content Grouping)     (Stream Hash / Bytes)    (Snapshot Enrichment)
+[Analysis Snapshot] ---> [Duplicate Candidates] ---> [Verification Operation] ---> [Verified Duplicate Set]
+(Metadata Evidence)     (Non-Content Grouping)     (Declared Method/Scope)    (Snapshot Enrichment)
 ```
 
 #### Duplicate Candidate Discovery
@@ -185,15 +195,15 @@ Duplicate remediation requires strict separation between heuristic grouping and 
 - Governed by explicit **Resource Policies** and **Interaction Policies** regarding offline/cloud file hydration, byte caps, and network access.
 - Emits progressive verification events with byte counts, stream identifiers, and throughput metrics.
 - Emits an immutable `SnapshotEnrichment` containing:
-  - Recorded **Verification Method** (e.g., cryptographic full-stream digest or pairwise comparison) and algorithm version.
+  - Recorded **Verification Method** (e.g., cryptographic stream digest verification or full-stream comparison) and algorithm version.
   - Verification Scope covered by the proof.
   - Per-object and per-set status: `verified_equal`, `mismatch`, `inaccessible`, `cloud_placeholder_skipped`, or `cancelled`.
   - Precise observation interval and diagnostic logs.
-- **Safety Gate**: Only candidates proven equal across their full requested Verification Scope are classified as a **Verified Duplicate Set**. Partial comparisons or failed stream reads immediately fail closed and disqualify the candidate set from deduplication eligibility.
+- **Safety Gate**: Only candidates proven equal across every content-bearing stream in their full requested Verification Scope under the declared Verification Method are classified as a **Verified Duplicate Set**. Candidate evidence alone remains strictly insufficient. Partial comparisons or failed stream reads immediately fail closed and disqualify the candidate set from deduplication eligibility.
 
 ### 8. Plan Formulation, Live Preflight, and Execution Boundary
 
-As mandated by [ADR 0002](0002-guarded-cleanup-safety.md), PigTree enforces an uncompromised boundary between preview analysis and storage mutation.
+As mandated by [ADR 0002](0002-guarded-cleanup-safety.md), PigTree enforces a strict boundary between preview analysis and storage mutation.
 
 ```
 [Artifact View] ---> [plan.create] ---> [Action Plan] ---+---> [plan.validate] (Live Preview)
@@ -214,8 +224,16 @@ As mandated by [ADR 0002](0002-guarded-cleanup-safety.md), PigTree enforces an u
 - `plan.validate`: Inspects live filesystem state to preview eligibility, risk classes, and potential stale preconditions without acquiring mutation locks or modifying storage. **Validation provides zero execution authority.**
 - `execution.run`: Accepts an exact, immutable Action Plan ID, integrity digest, and explicit Interaction/Consent tokens.
 - **Live Preflight**: Immediately before each step in an execution group, the engine performs live re-observation under the active execution context. It verifies volume identity, file IDs, link counts, reparse tags, parent paths, security descriptors, and content evidence.
-- If any preflight condition fails, the step is aborted with `precondition_failed`, the dependent group is halted, and no mutation occurs.
+- If any preflight condition fails, the step is aborted with `precondition_failed`, the dependent group is halted, and zero mutation occurs for the rejected step. Earlier independent steps or execution groups may already have committed, and subsequent independent groups may continue according to the immutable plan.
 - Each settled step records its exact outcome, native platform codes, and Recovery Artifact identifiers in an immutable `ExecutionRecord`.
+
+#### Execution Recovery (`execution.recover`)
+- Accepts and executes an exact, immutable recovery Action Plan referencing specific Recovery Artifacts, target paths, and preconditions; it is not a direct restore primitive.
+- Follows the same Live Preflight, step journaling, and Commit Point safety guarantees as standard execution.
+
+#### Import Trust Rule
+- Imported or foreign Action Plans carry evidence only; they possess zero mutation authority.
+- Executing actions in the local environment requires compiling and validating a newly created, locally bound immutable Action Plan under the local security context.
 
 ### 9. Interaction Policy, Typed Challenges, and Authority Delegation
 
@@ -229,7 +247,7 @@ Every submitted Engine Command declares its interactive posture:
 
 #### Typed Challenge Protocol
 When an operation requires user confirmation:
-1. The engine pauses the affected execution thread and emits an `OperationEvent` of type `challenge_requested`.
+1. The engine pauses the affected operation or execution step and emits an `OperationEvent` of type `challenge_requested`.
 2. The payload contains:
    - Unique, cryptographically random `challenge_nonce`.
    - Challenge Type (`permanent_deletion_confirmation`, `cloud_hydration_consent`, `elevation_consent`, `risk_caution_acknowledgement`).
@@ -240,7 +258,7 @@ When an operation requires user confirmation:
 
 #### Authority Delegation and Elevation
 - Connecting to the engine grants zero implicit authority.
-- The engine inherits the OS security token of the calling process.
+- Caller authority semantically derives from the authenticated local caller (process topology and concrete credential mechanisms are deferred to #14).
 - When an operation requires administrative privilege (such as elevated traversal or protected cleanup), elevation occurs strictly via the short-lived, least-privilege helper architecture defined in [ADR 0001](0001-scanning-and-privilege-architecture.md) and [ADR 0002](0002-guarded-cleanup-safety.md).
 - Elevated helpers authenticate against the exact operation nonce and plan digest, execute solely within their authorized execution group, and terminate immediately upon completion.
 
@@ -249,23 +267,23 @@ When an operation requires user confirmation:
 The engine maintains no global "current scan" singleton. Multiple independent operations may execute concurrently subject to strict resource arbitration.
 
 #### Resource Policies
-Clients assign a **Resource Policy** to each operation:
-- `foreground_balanced`: Balanced thread pool concurrency, responsive I/O, moderate memory footprint. Default for interactive GUI sessions.
-- `background_low_impact`: Constrained worker threads, throttled I/O priorities, minimized working set, yield-on-contention. Ideal for background maintenance and non-interactive scripts.
-- `benchmark`: Pinned worker threads, maximum allowable concurrency, unthrottled I/O for reproducible performance measurement.
+Clients assign a **Resource Policy** declaring named resource intent and budgets to each operation:
+- `foreground_balanced`: Balanced concurrency and responsive I/O suited for interactive user sessions.
+- `background_low_impact`: Constrained concurrency, throttled I/O priorities, minimized working set, and yield-on-contention suited for background maintenance and non-interactive automation.
+- `benchmark`: Controlled, declared, and reported resource settings configured for reproducible performance measurement (with specific targets and configurations deferred to #13 and #14).
 
-Resource policies enforce explicit caps on worker thread count, memory cache limits, maximum read rate, network bandwidth, cloud hydration bytes, and temporary disk allocation. The engine reports effective, clamped, or rejected policies in its initial operation lifecycle event.
+Resource policies declare named resource intent and enforce budgeted limits on concurrency, memory bounds, I/O rates, network usage, cloud hydration limits, and temporary storage allocation. The engine reports effective, clamped, or rejected policies in its initial operation lifecycle event.
 
 #### Concurrency and Collision Arbitration
-- **Read Operations**: Multiple Analysis Runs, queries, and verification operations can execute concurrently across distinct or overlapping Scan Targets, bounded by aggregate memory and thread budgets.
-- **Mutating Operations**: `execution.run` acquires exclusive, typed reservations over its targeted Directory Entries, Filesystem Objects, and volume recovery vaults.
+- **Read Operations**: Multiple Analysis Runs, queries, and verification operations can execute concurrently across distinct or overlapping Scan Targets, bounded by aggregate memory and concurrency budgets.
+- **Mutating Operations**: `execution.run` and `execution.recover` acquire exclusive, typed reservations over their targeted Directory Entries, Filesystem Objects, and volume recovery vaults.
 - If a mutating operation encounters a conflicting lock held by another operation, the engine rejects the command with `resource_conflict` or enqueues it according to caller policy. **Silent cancellation, handle stealing, or implicit target retargeting is strictly prohibited.**
 
 ### 11. Diagnostics, Privacy, and Redaction Profiles
 
 Diagnostics and error reporting are structured, typed, and privacy-preserving by default.
 
-#### Diagnostic Envelope
+#### Diagnostic Envelope and Evidence
 Every diagnostic emitted by the engine (in event streams, artifacts, or CLI output) contains:
 - `code`: Stable, documented diagnostic identifier (e.g., `FS_ACCESS_DENIED`, `NTFS_MFT_CORRUPT_RECORD`, `PREFLIGHT_LINK_COUNT_MISMATCH`).
 - `category`: Classification (`filesystem`, `privilege`, `validation`, `preflight`, `resource`, `integrity`).
@@ -275,15 +293,23 @@ Every diagnostic emitted by the engine (in event streams, artifacts, or CLI outp
 - `result_usability`: Impact on current artifact (`artifact_valid_complete`, `artifact_valid_partial`, `artifact_unusable`).
 - `message`: Human-readable summary.
 - `native_cause`: Structured OS error code (e.g., Win32 `ERROR_ACCESS_DENIED` [5], `NTSTATUS` `STATUS_BUFFER_TOO_SMALL`).
+- `diagnostic_evidence`: Underlying error codes, observed attributes, and contextual facts supporting the diagnostic.
+- `suggested_policy`: Recommended remediation or policy action (e.g., retry with elevation, adjust Resource Policy, add safeguard exception, or ignore benign gap).
+
+#### Local vs. Redacted Diagnostic Channels
+The engine maintains a strict separation between diagnostic channels:
+- **Full-Local Diagnostic Channel**: Retains raw native error arguments, unredacted paths, and detailed platform diagnostics for local troubleshooting and local artifact storage.
+- **Shareable / Redacted Diagnostic Output**: Strips or pseudonymizes sensitive paths, user identifiers, and native parameters per the active Redaction Profile.
 
 #### Privacy and Redaction Profiles
 To allow users to export diagnostics, benchmarks, and space reports without leaking personally identifiable information (PII) or confidential corporate directory structures:
 - Authoritative local artifacts store full observed metadata securely on the local machine.
 - Export and sharing commands support explicit, versioned **Redaction Profiles**:
-  - `obfuscate_paths`: Replaces directory and file names with consistent pseudonymous hashes while preserving directory hierarchy and tree depth.
-  - `mask_user_identities`: Hashes or strips Owner security principals and SID strings.
+  - `obfuscate_paths`: Replaces directory and file names with consistent pseudonyms while preserving directory hierarchy and tree depth.
+  - `mask_user_identities`: Masks or strips Owner security principals and SID strings.
   - `scrub_native_messages`: Strips sensitive path arguments from native Win32/NT error strings.
-- Derived redacted exports record their transformation profile, preserve mathematical aggregations and Object Identity relationships, and **carry zero execution authority for mutation**.
+- Redaction preserves declared structural relationships and statistical aggregates, but may pseudonymize Object Identity (e.g., generating consistent pseudonyms within the export rather than revealing exact local filesystem identifiers).
+- Exact local Object Identities and observed paths are sensitive; redacted output **carries zero execution authority for mutation**.
 - PigTree contains no automated telemetry, cloud tracking, or background reporting services.
 
 ### 12. Capability Discovery and Extensibility Boundary
@@ -295,14 +321,14 @@ Returns a structured `CapabilityReport` detailing:
 - `contract_version`: Supported semantic contract versions.
 - `supported_commands`: List of available command verbs and accepted schema versions.
 - `filesystem_adapters`: Supported adapters per filesystem (e.g., `win32_directory_traversal`, `ntfs_raw_mft_reader`, `refs_directory_traversal`) and their availability under current privileges.
-- `elevation_support`: Availability of UAC broker helpers and current process token privilege level.
+- `elevation_support`: Availability of privilege elevation helpers and caller authority level.
 - `cleanup_capabilities`: Supported platform deletion modes (Recycle Bin, permanent delete, NTFS same-volume Hard Link replacement).
 - `query_features`: Supported query operators, index accelerators, and export formats.
 - `resource_limits`: Configurable minimum and maximum concurrency, memory, and I/O limits.
 
 #### Extensibility Boundary
-- In v1, third-party in-process dynamic link library (DLL) plugin loading is prohibited inside the engine core to uphold memory safety and security boundaries.
-- Future integrations and custom tooling interact exclusively through the transport-neutral command seam, CLI standard streams, versioned artifacts, and namespaced extension properties.
+- In v1, the shared engine core does not expose a stable third-party in-process plugin ABI.
+- Integrations and custom tooling interact exclusively through the transport-neutral command seam, CLI standard streams, versioned artifacts, and namespaced extension properties.
 
 ### 13. Automation, CLI Contracts, Machine Streams, and Exit Classes
 
@@ -320,7 +346,7 @@ The command-line interface provides full automation parity with the GUI, designe
 #### Locale-Neutral Data Representation
 All machine-readable outputs adhere to strict locale-neutral standards:
 - **Numbers**: Integer byte counts (no floating-point truncation; no locale comma/period ambiguities).
-- **Timestamps**: ISO 8601 / RFC 3339 UTC strings (e.g., `2026-08-28T14:30:00.000Z`) with explicit filesystem timestamp kind annotations.
+- **Timestamps**: Unambiguous UTC timestamp representations with explicit filesystem timestamp kind annotations.
 - **Paths**: Exact Windows path spelling preserved in raw strings, paired with a normalized lowercase comparison representation where appropriate.
 - **Enums**: Lowercase snake_case identifiers (`finished`, `not_observed`, `routine`, `verified_equal`).
 
@@ -328,15 +354,15 @@ All machine-readable outputs adhere to strict locale-neutral standards:
 
 | Exit Code | Exit Class | Semantic Meaning | Terminal Output Guarantee |
 |---|---|---|---|
-| `0` | `SUCCESS` | Operation finished with Complete Coverage and zero critical errors. | Valid artifact / complete result set emitted. |
-| `1` | `OPERATION_FAILED` | Operation encountered fatal execution or platform error. | Partial artifact (if salvageable) + fatal diagnostic in Terminal Result. |
+| `0` | `SUCCESS` | Operation finished with terminal success under the selected policy and profile. | Valid artifact / complete result set emitted under selected policy. |
+| `1` | `OPERATION_FAILED` | Operation encountered fatal execution or platform error (in Action Execution, earlier mutation steps may have committed). | Fatal diagnostic in Terminal Result; salvageable partial artifact or immutable `ExecutionRecord` detailing settled steps. |
 | `2` | `COMMAND_ERROR` | Malformed CLI arguments, invalid schema, or unsupported command. | Error diagnostic emitted to stderr / JSON. |
-| `3` | `CANCELLED` | Operation was cleanly cancelled by user or automation signal. | Partial artifact published; `RunOutcome = cancelled`. |
-| `4` | `COVERAGE_GAPS_PRESENT` | Operation finished, but resulting Coverage is Partial or Indeterminate. | Valid partial artifact published; gaps manifested. |
-| `5` | `INTERACTION_REQUIRED` | Operation paused for challenge under `interactive_forbidden` policy. | Challenge specification emitted in terminal envelope. |
-| `6` | `PREFLIGHT_FAILED` | Action Execution Live Preflight rejected one or more steps. | Stale precondition diagnostics in Execution Record; zero mutations. |
+| `3` | `CANCELLED` | Operation was cleanly cancelled by user or automation signal. | Operation settled with `RunOutcome = cancelled`; may publish a coherent partial artifact if salvageable; `ExecutionRecord` emitted if mutation was in flight. |
+| `4` | `COVERAGE_GAPS_PRESENT` | Operation finished, but policy-significant Coverage Gaps or incomplete observations are present relative to the profile. | Valid partial artifact published with explicit Coverage Gaps manifested. |
+| `5` | `INTERACTION_REQUIRED` | Operation required user interaction, consent, or privilege elevation that was not provided or occurred under an `interactive_forbidden` policy. | Challenge or elevation specification emitted in terminal envelope. |
+| `6` | `PREFLIGHT_FAILED` | Action Execution Live Preflight rejected one or more steps. | Precondition failure diagnostics in `ExecutionRecord`; zero mutations occur for rejected steps (earlier committed steps and independent group outcomes are preserved). |
 
-Strict automation modes (e.g., `--fail-on-gaps`, `--fail-on-warnings`) promote Exit Class `4` to non-zero failure codes for CI pipeline enforcement.
+Strict automation policies (e.g., requiring complete coverage or zero warnings) promote selected warnings or non-fatal Coverage Gaps into Exit Class 4 or another documented non-zero policy exit class for automated pipeline enforcement.
 
 ### 14. Invariant Catalog
 
@@ -344,20 +370,20 @@ The shared engine enforces a set of immutable system invariants across all opera
 
 1. **Snapshot Immutability**: Once an `AnalysisSnapshot`, `SnapshotEnrichment`, `ActionPlan`, or `ExecutionRecord` is finalized and assigned an ID, its content and digest are immutable.
 2. **Coverage Honesty**: Missing, inaccessible, or unattempted observations are recorded as `Unavailable` or `Not Observed` with provenance; they are never coerced to zero, omitted silently, or represented as empty containers.
-3. **No Phantom Deduplication**: A `VerifiedDuplicateSet` requires 100% verified byte-for-byte equality across all streams in the declared Verification Scope. Metadata-only candidate groupings never authorize Hard Link replacement.
-4. **Preflight Before Commit**: Every mutation in an Action Execution must pass Live Preflight immediately prior to its Commit Point. If preflight fails, the operation halts and leaves the entry untouched.
+3. **No Phantom Deduplication**: A `VerifiedDuplicateSet` requires proving every content-bearing stream under the declared Verification Method and Verification Scope. Metadata-only candidate groupings or candidate evidence alone never authorize Hard Link replacement.
+4. **Preflight Before Commit**: Every mutation in an Action Execution must pass Live Preflight immediately prior to its Commit Point. If preflight fails, that step is aborted with zero mutation, dependent steps in its group are halted, and earlier committed or independent steps are accurately recorded in the `ExecutionRecord`.
 5. **No Synthetic Rollback**: PigTree never claims multi-file transaction rollback across Windows filesystems. Settled operations remain settled, and partial executions record exact step outcomes in the `ExecutionRecord`.
 6. **Alias Distinction**: Multiple Directory Entries sharing a Filesystem Object are distinct entries referencing one object. Deleting an alias deletes the Directory Entry, freeing storage only when the final reference is removed.
-7. **Redaction Authority Prohibition**: Redacted artifacts and query projections carry zero authority for Action Plan formulation or execution.
+7. **Redaction Authority Prohibition**: Redacted artifacts and query projections carry zero authority for Action Plan formulation or execution. Exact identities may be pseudonymized to protect privacy while preserving structural relationships and aggregates.
 8. **Channel Integrity**: Data channel observations are lossless and strictly ordered. Coalescing is restricted entirely to intermediate progress events.
-9. **Fail-Closed Compatibility**: Unknown required schema fields, command verbs, risk classes, or recovery classes immediately abort processing; they never resolve to default assumptions.
+9. **Fail-Closed on Unknown Required Elements**: Unknown required schema fields, command verbs, risk classes, or recovery classes immediately abort processing; they never resolve to default assumptions. Unknown optional fields in minor schema versions are safely ignored.
 10. **Clean Engine Boundary**: The shared engine contains zero UI framework code, window handles, or interactive modal dialog loops.
 
 ## Consequences
 
 ### Positive
 - **Guaranteed Parity Across Interfaces**: GUI, CLI, and automated agents execute identical domain logic, validation checks, and safety rules.
-- **Robust Automation and Scriptability**: Versioned NDJSON streams, deterministic exit classes, and typed challenges enable rock-solid pipeline integration.
+- **Robust Automation and Scriptability**: Versioned NDJSON streams, deterministic exit classes, and typed challenges enable reliable pipeline integration.
 - **Verifiable Auditability and Safety**: Immutable artifacts, explicit lineage tracking, and live preflight eliminate stale-scan race conditions and data corruption risks.
 - **Privacy and Data Control**: Redaction Profiles allow safe sharing of storage audits and diagnostics without exposing sensitive file paths or user identities.
 - **Clean Architectural Separation**: Decoupling the semantic domain contract from technology choices allows independent evolution of UI frameworks, storage engines, and IPC mechanisms.
@@ -375,9 +401,9 @@ The following architectural alternatives were evaluated and rejected:
 - **In-Memory Mutable Snapshot Model**: Rejected. Modifying snapshot objects in place as scans progress prevents reliable historical comparison, breaks multi-client query consistency, and violates lineage guarantees.
 - **Single Mixed Output Stream for CLI**: Rejected. Interleaving log messages, progress bars, and domain data on stdout corrupts machine parsers and forces fragile regex scraping.
 - **Automatic Heuristic Rollback**: Rejected. Windows filesystems do not support atomic multi-file rollback. Claiming transactional undo creates false confidence and masks partial execution states.
-- **Metadata-Only / Sampled Deduplication**: Rejected. Authorizing Hard Link consolidation based on file sizes or partial stream hashes causes catastrophic silent data corruption.
+- **Metadata-Only / Candidate Evidence Deduplication**: Rejected. Authorizing Hard Link consolidation based on candidate metadata or unverified stream comparisons causes catastrophic silent data corruption.
 - **Implicit "Latest" Artifact View Resolution**: Rejected. Automatically binding queries or plans to the latest unverified enrichment creates race conditions; artifact views must explicitly declare their base snapshot and enrichment chain.
 - **Coercing Unknown Values to Zero**: Rejected. Treating inaccessible or unobserved file sizes as zero distorts capacity reconciliation and leads users to delete seemingly "empty" directories that contain protected data.
 - **UI State in Saved Artifact Packages**: Rejected. Storing window positions, treemap layout coordinates, or expanded tree nodes inside domain artifacts breaks headless re-analysis and pollutes versioned schemas.
 - **Interactive UI Dialogs inside the Engine**: Rejected. Putting message boxes or credential prompts inside the engine blocks non-interactive automation and violates headless operation principles.
-- **Uncontracted Ad-Hoc Plugin Architecture**: Rejected. Loading arbitrary in-process DLLs in v1 compromises engine memory safety and destabilizes elevated helper isolation.
+- **Uncontracted In-Process Plugins**: Rejected. Providing a stable third-party in-process plugin ABI in v1 introduces ABI fragility and expands the security boundary; integrations interact through the transport-neutral seam.

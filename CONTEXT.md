@@ -200,7 +200,7 @@ The declared interactive posture of an Engine Command or Engine Operation (forbi
 The named and budgeted operational profile (such as foreground-balanced, background-low-impact, or benchmark) governing an Engine Operation's maximum CPU concurrency, memory footprint, I/O rates, network usage, cloud hydration limits, and temporary storage allocation.
 
 **Redaction Profile**:
-A declared, versioned transformation specification that produces a derived, sanitized export or query projection by masking or replacing sensitive facts (such as Observed Paths, Directory Entry names, security principal identities, or native diagnostic messages) while preserving structural relationships, Object Identity integrity, and statistical aggregates without granting mutation authority.
+A declared, versioned transformation specification that produces a derived, sanitized export or query projection by masking or replacing sensitive facts (such as Observed Paths, Directory Entry names, security principal identities, or native diagnostic messages) while preserving structural relationships, statistical aggregates, and consistent pseudonymized identities without granting mutation authority.
 
 **Capability Report**:
 A structured, transport-neutral declaration emitted by the shared engine describing supported contract versions, Engine Command schemas, query and export capabilities, platform and filesystem adapters, privilege elevation helpers, resource bounds, and environment constraints.
