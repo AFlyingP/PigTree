@@ -1,0 +1,7 @@
+[package]
+name = "pigtree-ipc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pigtree-protocol = { path = "../pigtree-protocol" }

@@ -1,0 +1,12 @@
+[package]
+name = "pigtree-engine"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pigtree-engine"
+path = "src/main.rs"
+
+[dependencies]
+pigtree-protocol = { path = "../pigtree-protocol" }
+pigtree-ipc = { path = "../pigtree-ipc" }
