@@ -195,3 +195,39 @@ A classification of a Directory Entry using an explicit rule, such as filename e
 
 **Content Classification**:
 A classification based on observed Content Stream evidence, with provenance and Value Knowledge. It is distinct from Entry Classification.
+
+**Engine Command**:
+A task-level, transport-neutral request submitted by a client (such as the GUI or CLI) to initiate an Engine Operation or perform a synchronous engine query (such as querying an immutable artifact or requesting a Capability Report).
+
+**Engine Operation**:
+A time-bounded, stateful execution of an Engine Command within the shared engine (such as an Analysis Run, duplicate verification, or Action Execution) identified by an opaque operation identifier, emitting ordered Operation Events across logical data and progress channels, and settling into exactly one Terminal Result.
+
+**Operation Event**:
+An ordered, typed, and timestamped lifecycle, progress, observation, warning, challenge, or diagnostic notification emitted by an active Engine Operation with monotonic sequence ordering, schema version, phase, and provenance.
+
+**Terminal Result**:
+The final summary outcome of an Engine Operation recording its Run Outcome (finished, cancelled, or failed), Observation Interval, summary metrics, primary artifact references or partial publication markers, and terminal diagnostics. It is distinct from artifact usability, integrity, and Coverage.
+
+**Artifact View**:
+An explicit logical presentation of domain data formed by combining an immutable base Analysis Snapshot with an ordered sequence of compatible Snapshot Enrichments (such as duplicate verification evidence or targeted re-observations); it never relies on an implicit "latest" state.
+
+**Query Grain**:
+The declared structural unit of a typed query result over an Artifact View (specifically Directory Entry, Filesystem Object, Content Stream, duplicate set, or whole-volume reconciliation row), defining the entity level at which predicates, projections, and aggregations apply.
+
+**Knowledge Policy**:
+The explicit rule declared by a query, operation, or export governing how incomplete Value Knowledge (Not Observed, Unavailable, or Not Applicable) is treated in filtering and aggregation, specifying whether unknown values match, do not match, or are segregated, without coercing unknown values to zero or empty values.
+
+**Interaction Policy**:
+The declared interactive posture of an Engine Command or Engine Operation (forbid, allow, or require interactive challenges), determining whether the engine may pause for typed challenges (such as content hydration consent, elevation, or credential confirmation) or must fail closed immediately when challenge-gated conditions arise.
+
+**Resource Policy**:
+The named and budgeted operational profile (such as foreground-balanced, background-low-impact, or benchmark) governing an Engine Operation's maximum CPU concurrency, memory footprint, I/O rates, network usage, cloud hydration limits, and temporary storage allocation.
+
+**Redaction Profile**:
+A declared, versioned transformation specification that produces a derived, sanitized export or query projection by masking or replacing sensitive facts (such as Observed Paths, Directory Entry names, security principal identities, or native diagnostic messages) while preserving structural relationships, statistical aggregates, and consistent pseudonymized identities without granting mutation authority.
+
+**Capability Report**:
+A structured, transport-neutral declaration emitted by the shared engine describing supported contract versions, Engine Command schemas, query and export capabilities, platform and filesystem adapters, privilege elevation helpers, resource bounds, and environment constraints.
+
+**Diagnostic**:
+A structured, typed record of an operational event, warning, error, or Coverage Gap carrying a stable diagnostic code, category, severity, scope, retryability assessment, result usability impact, native cause details, and human-readable explanation, with sensitive fields marked for redaction under the active Redaction Profile.
