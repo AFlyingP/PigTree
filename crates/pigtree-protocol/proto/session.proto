@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package pigtree.session.v1;
+
+message AuthHandshakeRequest {
+  bytes bootstrap_nonce = 1;
+  bytes client_nonce = 2;
+  uint32 client_pid = 3;
+  uint32 client_session_id = 4;
+}
+
+message AuthHandshakeResponse {
+  uint32 status = 1;
+  bytes server_nonce = 2;
+  uint32 server_pid = 3;
+  bytes channel_key_hash = 4;
+  string error_message = 5;
+}
+
+message PingRequest {
+  uint64 timestamp_utc_ms = 1;
+  uint32 delay_ms = 2;
+}
+
+message PingResponse {
+  uint64 timestamp_utc_ms = 1;
+  uint64 echo_timestamp_utc_ms = 2;
+}
+
+message EchoRequest {
+  string payload = 1;
+  uint32 delay_ms = 2;
+}
+
+message EchoResponse {
+  string payload = 1;
+}
+
+message HealthRequest {
+  bool include_memory = 1;
+  uint32 delay_ms = 2;
+}
+
+message HealthResponse {
+  string status = 1;
+  uint64 uptime_ms = 2;
+  uint64 memory_private_bytes = 3;
+  uint32 handle_count = 4;
+}
+
+message StatusRequest {
+  uint32 delay_ms = 1;
+}
+
+message StatusResponse {
+  string state = 1;
+  uint32 active_runs = 2;
+  uint64 total_observations = 3;
+  string session_id = 4;
+}
+
+message VersionRequest {
+  uint32 delay_ms = 1;
+}
+
+message VersionResponse {
+  string engine_version = 1;
+  uint32 protocol_version = 2;
+  string build_date = 3;
+  string commit_hash = 4;
+  repeated string capabilities = 5;
+}
+
+message ShutdownRequest {}
+
+message ShutdownResponse {
+  uint32 status = 1;
+}
+
+message CancelRequest {
+  string target_request_id = 1;
+  string reason = 2;
+}
+
+message CancelResponse {
+  bool cancelled = 1;
+  string message = 2;
+}
+
+message ErrorResponse {
+  string code = 1;
+  string message = 2;
+  string details = 3;
+}
+
+message CommandRequest {
+  string request_id = 1;
+  oneof request {
+    AuthHandshakeRequest auth_handshake = 2;
+    PingRequest ping = 3;
+    EchoRequest echo = 4;
+    HealthRequest health = 5;
+    StatusRequest status = 6;
+    VersionRequest version = 7;
+    ShutdownRequest shutdown = 8;
+    CancelRequest cancel = 9;
+  }
+}
+
+message CommandResponse {
+  string request_id = 1;
+  uint32 status = 2;
+  string error_code = 3;
+  string error_message = 4;
+  oneof response {
+    AuthHandshakeResponse auth_handshake = 5;
+    PingResponse ping = 6;
+    EchoResponse echo = 7;
+    HealthResponse health = 8;
+    StatusResponse status_payload = 9;
+    VersionResponse version = 10;
+    ShutdownResponse shutdown = 11;
+    CancelResponse cancel = 12;
+    ErrorResponse error = 13;
+  }
+}

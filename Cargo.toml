@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "crates/pigtree-protocol",
+    "crates/pigtree-ipc",
+    "crates/pigtree-engine",
+    "crates/pigtree-cli",
+]
+resolver = "2"
