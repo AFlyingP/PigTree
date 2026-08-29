@@ -1,5 +1,5 @@
 use pigtree_ipc::bootstrap::{read_bootstrap_nonce, spawn_engine, BootstrapPipe};
-use pigtree_ipc::client::EngineClientSession;
+use pigtree_ipc::client::{EngineClientSession, ScanCallOutcome};
 use pigtree_ipc::error::IpcError;
 use pigtree_ipc::job::JobObject;
 use pigtree_ipc::pipe::{format_pipe_name, NamedPipeClient, NamedPipeServer};
@@ -315,6 +315,18 @@ fn test_client_scan_success_with_progress_and_terminal() {
         last_seq = p.sequence_number;
         assert!(p.timestamp_iso.ends_with('Z'));
         assert!(!p.current_phase.is_empty());
+        assert!(!p.current_directory.is_empty());
+        let norm_cur = p
+            .current_directory
+            .strip_prefix("\\\\?\\")
+            .unwrap_or(&p.current_directory);
+        let norm_target = target_str.strip_prefix("\\\\?\\").unwrap_or(target_str);
+        assert!(
+            norm_cur.starts_with(norm_target),
+            "current_directory '{}' must be under target '{}'",
+            p.current_directory,
+            target_str
+        );
     }
 
     session.shutdown().expect("shutdown");
@@ -608,19 +620,23 @@ fn test_engine_busy_rejection_during_active_scan() {
         .send_message(ChannelTag::Command, FrameFlags::empty(), &scan_req)
         .expect("send scan");
 
-    // Immediately send a Ping request while scan is active
-    let ping_req = pigtree_protocol::protobuf::CommandRequest {
-        request_id: "ping-while-busy".to_string(),
-        request: Some(pigtree_protocol::protobuf::command_request::Request::Ping(
-            pigtree_protocol::protobuf::PingRequest {
-                timestamp_utc_ms: 12345,
-                delay_ms: 0,
-            },
-        )),
+    // Immediately send a GetChildren request while scan is active
+    let gc_req = pigtree_protocol::protobuf::CommandRequest {
+        request_id: "gc-while-busy".to_string(),
+        request: Some(
+            pigtree_protocol::protobuf::command_request::Request::GetChildren(
+                pigtree_protocol::protobuf::GetChildrenRequest {
+                    operation_id: "scan-busy-1".to_string(),
+                    parent_id: 1,
+                    offset: 0,
+                    limit: 100,
+                },
+            ),
+        ),
     };
     framed
-        .send_message(ChannelTag::Command, FrameFlags::empty(), &ping_req)
-        .expect("send ping");
+        .send_message(ChannelTag::Command, FrameFlags::empty(), &gc_req)
+        .expect("send get_children");
 
     // Read messages from pipe until scan completes
     let mut received_busy = false;
@@ -637,8 +653,8 @@ fn test_engine_busy_rejection_during_active_scan() {
                 let resp = pigtree_protocol::protobuf::CommandResponse::decode(&frame.payload[..])
                     .expect("decode response");
 
-                if resp.request_id == "ping-while-busy" {
-                    if resp.status != 0
+                if resp.request_id == "gc-while-busy" {
+                    if resp.status == 1
                         && (resp.error_code == "BUSY" || resp.error_message.contains("busy"))
                     {
                         received_busy = true;
@@ -659,8 +675,12 @@ fn test_engine_busy_rejection_during_active_scan() {
     }
 
     assert!(
-        received_busy || received_scan_response,
-        "Engine must process commands deterministically"
+        received_busy,
+        "GetChildren during active scan must be rejected with BUSY"
+    );
+    assert!(
+        received_scan_response,
+        "Active scan should complete and send ScanResponse"
     );
 
     let _ = child.terminate(0);
@@ -763,6 +783,21 @@ fn test_progress_backpressure_never_yields_corruption() {
                 progress_count += 1;
                 assert!(p.sequence_number > last_seq);
                 last_seq = p.sequence_number;
+                assert!(!p.current_directory.is_empty());
+                let target_path_str = dir.to_str().unwrap();
+                let norm_cur = p
+                    .current_directory
+                    .strip_prefix("\\\\?\\")
+                    .unwrap_or(&p.current_directory);
+                let norm_target = target_path_str
+                    .strip_prefix("\\\\?\\")
+                    .unwrap_or(target_path_str);
+                assert!(
+                    norm_cur.starts_with(norm_target),
+                    "current_directory '{}' must be under target '{}'",
+                    p.current_directory,
+                    target_path_str
+                );
                 // Add simulated client processing delay to exercise backpressure
                 std::thread::sleep(Duration::from_millis(5));
             }),
@@ -783,4 +818,288 @@ fn test_progress_backpressure_never_yields_corruption() {
 
     session.shutdown().expect("shutdown");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_get_children_pagination_and_error_lifecycle() {
+    let engine_exe = get_engine_exe();
+    let temp_tree = create_temp_scan_tree("gc_lifecycle");
+
+    // Add subdirectories and files for rich ordering checks
+    let sub_a = temp_tree.join("DirAlpha");
+    std::fs::create_dir(&sub_a).unwrap();
+    std::fs::write(sub_a.join("inner.txt"), vec![0x11; 500]).unwrap();
+
+    let sub_b = temp_tree.join("dirbeta");
+    std::fs::create_dir(&sub_b).unwrap();
+    std::fs::write(sub_b.join("inner2.txt"), vec![0x22; 1000]).unwrap();
+
+    let file_top = temp_tree.join("top_file.bin");
+    std::fs::write(&file_top, vec![0x33; 2000]).unwrap();
+
+    let mut session = EngineClientSession::launch(&engine_exe).expect("launch engine session");
+
+    // 0. Test query before any scan has settled returns STALE_OPERATION
+    let err_pre_scan = session
+        .get_children("op-not-run-yet", 0, 0, 100)
+        .expect_err("pre-scan get_children should fail");
+    match err_pre_scan {
+        IpcError::CommandError { code, message } => {
+            assert_eq!(code, "STALE_OPERATION");
+            assert!(message.contains("op-not-run-yet"));
+        }
+        other => panic!(
+            "expected CommandError with STALE_OPERATION, got {:?}",
+            other
+        ),
+    }
+
+    let scan_resp = session
+        .scan(temp_tree.to_str().unwrap())
+        .expect("scan success");
+
+    let op_id = &scan_resp.operation_id;
+
+    // 1. Query root via virtual parent 0 with default limit 0 (should default to 100)
+    let gc_root = session
+        .get_children(op_id, 0, 0, 0)
+        .expect("get root child with limit 0 default");
+    assert_eq!(gc_root.total_children, 1);
+    assert_eq!(gc_root.nodes.len(), 1);
+    assert_eq!(gc_root.nodes[0].id, 1);
+    assert_eq!(gc_root.nodes[0].entry_kind, 1);
+
+    // 2. Query root's children (parent_id = 1) with max limit 500
+    let gc_children = session
+        .get_children(op_id, 1, 0, 500)
+        .expect("get root children with max limit 500");
+    // Should have: DirAlpha, dirbeta, top_file.bin, plus sub1/sub2/file1/file2 from create_temp_scan_tree
+    assert!(gc_children.total_children > 0);
+    // Verify directories come first
+    let mut seen_file = false;
+    let mut file_node_id = None;
+    for node in &gc_children.nodes {
+        if node.entry_kind == 1 {
+            assert!(!seen_file, "Directories must appear before files");
+        } else {
+            seen_file = true;
+            if file_node_id.is_none() {
+                file_node_id = Some(node.id);
+            }
+        }
+    }
+
+    // 3. Test limit > 500 returns INVALID_LIMIT
+    let err_limit = session
+        .get_children(op_id, 1, 0, 501)
+        .expect_err("limit > 500 should fail");
+    match err_limit {
+        IpcError::CommandError { code, message } => {
+            assert_eq!(code, "INVALID_LIMIT");
+            assert!(message.contains("500"));
+        }
+        other => panic!("expected CommandError with INVALID_LIMIT, got {:?}", other),
+    }
+
+    // 4. Test invalid parent_id returns INVALID_PARENT
+    let err_parent = session
+        .get_children(op_id, 99999, 0, 50)
+        .expect_err("invalid parent should fail");
+    match err_parent {
+        IpcError::CommandError { code, message } => {
+            assert_eq!(code, "INVALID_PARENT");
+            assert!(message.contains("99999"));
+        }
+        other => panic!("expected CommandError with INVALID_PARENT, got {:?}", other),
+    }
+
+    // 5. Test parent_id pointing to a file returns INVALID_PARENT
+    if let Some(file_id) = file_node_id {
+        let err_file_parent = session
+            .get_children(op_id, file_id, 0, 50)
+            .expect_err("file as parent should fail");
+        match err_file_parent {
+            IpcError::CommandError { code, message } => {
+                assert_eq!(code, "INVALID_PARENT");
+                assert!(message.contains("not a directory"));
+            }
+            other => panic!("expected CommandError with INVALID_PARENT, got {:?}", other),
+        }
+    }
+
+    // 6. Test stale operation_id returns STALE_OPERATION
+    let err_stale = session
+        .get_children("stale-op-id-999", 1, 0, 50)
+        .expect_err("stale operation should fail");
+    match err_stale {
+        IpcError::CommandError { code, message } => {
+            assert_eq!(code, "STALE_OPERATION");
+            assert!(message.contains("stale-op-id-999"));
+        }
+        other => panic!(
+            "expected CommandError with STALE_OPERATION, got {:?}",
+            other
+        ),
+    }
+
+    session.shutdown().expect("shutdown");
+    let _ = std::fs::remove_dir_all(&temp_tree);
+}
+
+#[test]
+fn test_get_children_on_cancelled_settled_scan() {
+    let engine_exe = get_engine_exe();
+    let temp_tree = create_temp_scan_tree("gc_cancel");
+
+    // Create a multi-level directory structure so traversal takes sufficient time
+    for i in 0..25 {
+        let sub = temp_tree.join(format!("dir_{i:02}"));
+        std::fs::create_dir(&sub).unwrap();
+        for j in 0..10 {
+            let sub2 = sub.join(format!("nested_{j:02}"));
+            std::fs::create_dir(&sub2).unwrap();
+            for f in 0..5 {
+                std::fs::write(sub2.join(format!("f_{f:02}.dat")), vec![0x55; 50]).unwrap();
+            }
+        }
+    }
+
+    let mut session = EngineClientSession::launch(&engine_exe).expect("launch engine session");
+
+    let h_cancel = unsafe { CreateEventW(std::ptr::null_mut(), TRUE, FALSE, std::ptr::null_mut()) };
+    let h_cancel_val = h_cancel as usize;
+
+    let h_cancel_thread = h_cancel_val;
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(60));
+        unsafe {
+            SetEvent(h_cancel_thread as HANDLE);
+        }
+    });
+
+    let scan_outcome = session.scan_with_progress_outcome(
+        temp_tree.to_str().unwrap(),
+        Some(move |p: pigtree_protocol::protobuf::ScanProgress| {
+            if p.observed_directories >= 1 {
+                unsafe {
+                    SetEvent(h_cancel_val as HANDLE);
+                }
+            }
+        }),
+        Some(h_cancel),
+    );
+
+    match scan_outcome {
+        Ok(ScanCallOutcome::Cancelled(sr)) => {
+            assert_eq!(
+                sr.run_outcome,
+                pigtree_protocol::protobuf::ScanRunOutcome::Cancelled as i32
+            );
+            assert_eq!(
+                sr.scope_coverage,
+                pigtree_protocol::protobuf::ScopeCoverage::Partial as i32
+            );
+            let op_id = &sr.operation_id;
+
+            // Root query via virtual parent 0
+            let gc_root = session
+                .get_children(op_id, 0, 0, 50)
+                .expect("GetChildren on root of cancelled scan should succeed");
+            assert_eq!(gc_root.total_children, 1);
+            assert_eq!(gc_root.nodes.len(), 1);
+            let root_id = gc_root.nodes[0].id;
+            assert_eq!(root_id, 1);
+
+            // Query root's children from the partial scan
+            let gc_children = session
+                .get_children(op_id, root_id, 0, 100)
+                .expect("GetChildren on root children of cancelled scan should succeed");
+            assert!(gc_children.total_children > 0);
+            assert!(!gc_children.nodes.is_empty());
+
+            // Pick an observed child directory if any and query its children
+            let child_dir = gc_children.nodes.iter().find(|n| n.entry_kind == 1);
+            if let Some(dir) = child_dir {
+                let gc_sub = session.get_children(op_id, dir.id, 0, 50);
+                assert!(
+                    gc_sub.is_ok(),
+                    "GetChildren on observed sub-directory should succeed"
+                );
+            }
+        }
+        Ok(ScanCallOutcome::Finished(_)) => {
+            panic!("scan should have been cancelled");
+        }
+        Err(e) => {
+            panic!("scan failed unexpectedly: {:?}", e);
+        }
+    }
+
+    unsafe {
+        CloseHandle(h_cancel);
+    }
+    session.shutdown().expect("shutdown");
+    let _ = std::fs::remove_dir_all(&temp_tree);
+}
+
+#[test]
+fn test_get_children_directory_subtree_aggregates_ipc() {
+    let engine_exe = get_engine_exe();
+    let temp_tree = std::env::temp_dir().join(unique_session_id("repro_tree"));
+    let _ = std::fs::remove_dir_all(&temp_tree);
+    std::fs::create_dir_all(&temp_tree).unwrap();
+
+    let nested_folder = temp_tree.join("nested_folder");
+    std::fs::create_dir_all(&nested_folder).unwrap();
+    std::fs::write(nested_folder.join("inner_file.bin"), vec![0xAB; 5000]).unwrap();
+
+    std::fs::write(temp_tree.join("known_file.dat"), vec![0xCD; 1024]).unwrap();
+    std::fs::write(temp_tree.join("empty_file.txt"), b"").unwrap();
+
+    let mut session = EngineClientSession::launch(&engine_exe).expect("launch engine session");
+
+    let scan_resp = session
+        .scan(temp_tree.to_str().unwrap())
+        .expect("scan success");
+    let op_id = &scan_resp.operation_id;
+
+    // Root query via virtual parent 0
+    let gc_root = session
+        .get_children(op_id, 0, 0, 10)
+        .expect("get root child");
+    assert_eq!(gc_root.total_children, 1);
+    assert_eq!(gc_root.nodes[0].logical_size, 6024);
+
+    // Root's immediate children query
+    let gc_children = session
+        .get_children(op_id, 1, 0, 10)
+        .expect("get root children");
+    assert_eq!(gc_children.total_children, 3);
+
+    let nested_node = gc_children
+        .nodes
+        .iter()
+        .find(|n| n.name == "nested_folder")
+        .expect("nested_folder node must exist");
+    assert_eq!(nested_node.entry_kind, 1);
+    assert_eq!(nested_node.logical_size, 5000);
+
+    let known_node = gc_children
+        .nodes
+        .iter()
+        .find(|n| n.name == "known_file.dat")
+        .expect("known_file.dat node must exist");
+    assert_eq!(known_node.entry_kind, 2);
+    assert_eq!(known_node.logical_size, 1024);
+
+    let empty_node = gc_children
+        .nodes
+        .iter()
+        .find(|n| n.name == "empty_file.txt")
+        .expect("empty_file.txt node must exist");
+    assert_eq!(empty_node.entry_kind, 2);
+    assert_eq!(empty_node.logical_size, 0);
+
+    session.shutdown().expect("shutdown");
+    let _ = std::fs::remove_dir_all(&temp_tree);
 }

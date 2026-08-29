@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <Platforms>AnyCPU;x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <Deterministic>true</Deterministic>
+    <AssemblyName>PigTree</AssemblyName>
+    <RootNamespace>PigTree</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.25.8" />
+    <PackageReference Include="Grpc.Tools" Version="2.59.0" PrivateAssets="All" />
+    <Protobuf Include="$(MSBuildThisFileDirectory)../../crates/pigtree-protocol/proto/session.proto"
+              Link="session.proto"
+              ProtoRoot="$(MSBuildThisFileDirectory)../../crates/pigtree-protocol/proto"
+              GrpcServices="None" />
+  </ItemGroup>
+
+  <!-- Rust engine and worker binaries staging -->
+  <PropertyGroup>
+    <_RustTargetDir Condition="'$(_RustTargetDir)' == '' and '$(Configuration)' == 'Release' and Exists('$(MSBuildThisFileDirectory)../../target/release/pigtree-engine.exe')">$(MSBuildThisFileDirectory)../../target/release/</_RustTargetDir>
+    <_RustTargetDir Condition="'$(_RustTargetDir)' == '' and '$(Configuration)' == 'Debug' and Exists('$(MSBuildThisFileDirectory)../../target/debug/pigtree-engine.exe')">$(MSBuildThisFileDirectory)../../target/debug/</_RustTargetDir>
+    <_RustTargetDir Condition="'$(_RustTargetDir)' == '' and Exists('$(MSBuildThisFileDirectory)../../target/release/pigtree-engine.exe')">$(MSBuildThisFileDirectory)../../target/release/</_RustTargetDir>
+    <_RustTargetDir Condition="'$(_RustTargetDir)' == '' and Exists('$(MSBuildThisFileDirectory)../../target/debug/pigtree-engine.exe')">$(MSBuildThisFileDirectory)../../target/debug/</_RustTargetDir>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(_RustTargetDir)' != ''">
+    <Content Include="$(_RustTargetDir)pigtree-engine.exe"
+             Condition="Exists('$(_RustTargetDir)pigtree-engine.exe')"
+             Link="pigtree-engine.exe"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Visible="false" />
+    <Content Include="$(_RustTargetDir)pigtree-scan-worker.exe"
+             Condition="Exists('$(_RustTargetDir)pigtree-scan-worker.exe')"
+             Link="pigtree-scan-worker.exe"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Visible="false" />
+  </ItemGroup>
+
+</Project>

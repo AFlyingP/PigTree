@@ -5,8 +5,8 @@ use pigtree_ipc::win32::*;
 use pigtree_ipc::FrameReadiness;
 use pigtree_protocol::protobuf::{
     command_request, command_response, CancelResponse, CommandResponse, CoverageGapReport,
-    EchoResponse, ErrorResponse, HealthResponse, PingResponse, ScanResponse, ScanRunOutcome,
-    ScopeCoverage, ShutdownResponse, StatusResponse, VersionResponse,
+    EchoResponse, ErrorResponse, GetChildrenResponse, HealthResponse, PingResponse, ScanResponse,
+    ScanRunOutcome, ScopeCoverage, ShutdownResponse, StatusResponse, VersionResponse,
 };
 use std::env;
 use std::process::ExitCode;
@@ -68,6 +68,12 @@ fn run() -> u8 {
         }
     };
 
+    struct SettledScan {
+        operation_id: String,
+        graph: pigtree_engine::DirectoryGraph,
+    }
+
+    let mut settled_scan: Option<SettledScan> = None;
     let mut idle_partial_start: Option<Instant> = None;
 
     // Main command processing loop
@@ -262,6 +268,7 @@ fn run() -> u8 {
                 }));
             }
             Some(command_request::Request::Scan(scan_req)) => {
+                settled_scan = None;
                 let validated_target = match pigtree_ipc::validator::validate_scan_target(
                     &scan_req.target_path,
                 ) {
@@ -560,6 +567,17 @@ fn run() -> u8 {
                             })
                             .collect();
 
+                        let resp_dir_count = graph.terminal().total_directories;
+                        let resp_file_count = graph.terminal().total_files;
+                        let resp_logical_bytes = graph.terminal().total_logical_bytes;
+                        let resp_allocated_bytes = graph.terminal().total_allocated_bytes;
+                        let resp_allocated_known = graph.allocated_bytes_known();
+
+                        settled_scan = Some(SettledScan {
+                            operation_id: active_op_id.clone(),
+                            graph,
+                        });
+
                         ScanResponse {
                             operation_id: active_op_id,
                             target_path: active_target_str,
@@ -567,12 +585,12 @@ fn run() -> u8 {
                             observation_started_iso: started_iso,
                             observation_completed_iso: completed_iso,
                             scope_coverage: scope_coverage as i32,
-                            directory_count: graph.terminal().total_directories,
-                            file_count: graph.terminal().total_files,
+                            directory_count: resp_dir_count,
+                            file_count: resp_file_count,
                             special_count: 0,
-                            logical_bytes: graph.terminal().total_logical_bytes,
-                            allocated_bytes: graph.terminal().total_allocated_bytes,
-                            allocated_bytes_known: graph.allocated_bytes_known(),
+                            logical_bytes: resp_logical_bytes,
+                            allocated_bytes: resp_allocated_bytes,
+                            allocated_bytes_known: resp_allocated_known,
                             coverage_gaps,
                             duration_ms,
                         }
@@ -631,6 +649,104 @@ fn run() -> u8 {
                     break;
                 }
                 continue;
+            }
+            Some(command_request::Request::GetChildren(req)) => {
+                let settled = match &settled_scan {
+                    Some(s) => s,
+                    None => {
+                        let error_code = "STALE_OPERATION";
+                        let error_msg = format!(
+                            "Operation ID '{}' not found or no scan has settled",
+                            req.operation_id
+                        );
+                        resp.status = 1;
+                        resp.error_code = error_code.to_string();
+                        resp.error_message = error_msg.clone();
+                        resp.response = Some(command_response::Response::Error(ErrorResponse {
+                            code: error_code.to_string(),
+                            message: error_msg,
+                            details: String::new(),
+                        }));
+                        if let Err(err) = session.send_response(&resp) {
+                            eprintln!("Failed to send response: {err}");
+                            break;
+                        }
+                        continue;
+                    }
+                };
+
+                if settled.operation_id != req.operation_id {
+                    let error_code = "STALE_OPERATION";
+                    let error_msg = format!(
+                        "Operation ID '{}' does not match active settled operation '{}'",
+                        req.operation_id, settled.operation_id
+                    );
+                    resp.status = 1;
+                    resp.error_code = error_code.to_string();
+                    resp.error_message = error_msg.clone();
+                    resp.response = Some(command_response::Response::Error(ErrorResponse {
+                        code: error_code.to_string(),
+                        message: error_msg,
+                        details: String::new(),
+                    }));
+                    if let Err(err) = session.send_response(&resp) {
+                        eprintln!("Failed to send response: {err}");
+                        break;
+                    }
+                    continue;
+                }
+
+                let limit = if req.limit == 0 { 100 } else { req.limit };
+                if limit > 500 {
+                    let error_code = "INVALID_LIMIT";
+                    let error_msg = format!(
+                        "Limit {} exceeds maximum allowed page size of 500",
+                        req.limit
+                    );
+                    resp.status = 1;
+                    resp.error_code = error_code.to_string();
+                    resp.error_message = error_msg.clone();
+                    resp.response = Some(command_response::Response::Error(ErrorResponse {
+                        code: error_code.to_string(),
+                        message: error_msg,
+                        details: String::new(),
+                    }));
+                    if let Err(err) = session.send_response(&resp) {
+                        eprintln!("Failed to send response: {err}");
+                        break;
+                    }
+                    continue;
+                }
+
+                match settled.graph.get_children_page(
+                    req.parent_id,
+                    req.offset as usize,
+                    limit as usize,
+                ) {
+                    Ok((total_children, nodes)) => {
+                        resp.response = Some(command_response::Response::GetChildren(
+                            GetChildrenResponse {
+                                operation_id: req.operation_id,
+                                parent_id: req.parent_id,
+                                total_children: total_children as u32,
+                                offset: req.offset,
+                                nodes,
+                            },
+                        ));
+                    }
+                    Err(err) => {
+                        let error_code = "INVALID_PARENT";
+                        let error_msg = err.to_string();
+                        resp.status = 1;
+                        resp.error_code = error_code.to_string();
+                        resp.error_message = error_msg.clone();
+                        resp.response = Some(command_response::Response::Error(ErrorResponse {
+                            code: error_code.to_string(),
+                            message: error_msg,
+                            details: String::new(),
+                        }));
+                    }
+                }
             }
             _ => {
                 resp.status = 1;

@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package pigtree.session.v1;
 
+option csharp_namespace = "PigTree.Session.V1";
+
 message AuthHandshakeRequest {
   bytes bootstrap_nonce = 1;
   bytes client_nonce = 2;
@@ -129,6 +131,34 @@ message ScanProgress {
   uint64 observed_allocated_bytes = 7;
   uint32 coverage_gaps = 8;
   string current_phase = 9;
+  string current_directory = 10;
+}
+
+message DirectoryEntryNode {
+  uint32 id = 1;
+  uint32 parent_id = 2;
+  string name = 3;
+  uint32 entry_kind = 4;
+  uint64 logical_size = 5;
+  uint64 allocated_size = 6;
+  bool allocated_size_known = 7;
+  uint32 child_count = 8;
+  bool has_children = 9;
+}
+
+message GetChildrenRequest {
+  string operation_id = 1;
+  uint32 parent_id = 2;
+  uint32 offset = 3;
+  uint32 limit = 4;
+}
+
+message GetChildrenResponse {
+  string operation_id = 1;
+  uint32 parent_id = 2;
+  uint32 total_children = 3;
+  uint32 offset = 4;
+  repeated DirectoryEntryNode nodes = 5;
 }
 
 message ScanResponse {
@@ -160,6 +190,7 @@ message CommandRequest {
     ShutdownRequest shutdown = 8;
     CancelRequest cancel = 9;
     ScanRequest scan = 10;
+    GetChildrenRequest get_children = 11;
   }
 }
 
@@ -180,5 +211,6 @@ message CommandResponse {
     ErrorResponse error = 13;
     ScanProgress scan_progress = 14;
     ScanResponse scan_response = 15;
+    GetChildrenResponse get_children = 16;
   }
 }

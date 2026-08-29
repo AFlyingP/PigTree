@@ -10,9 +10,10 @@ use crate::win32::*;
 use pigtree_protocol::frame::{ChannelTag, FrameFlags};
 use pigtree_protocol::protobuf::{
     command_request, command_response, AuthHandshakeRequest, AuthHandshakeResponse, CancelRequest,
-    CancelResponse, CommandRequest, CommandResponse, EchoRequest, EchoResponse, HealthRequest,
-    HealthResponse, PingRequest, PingResponse, ScanProgress, ScanRequest, ScanResponse,
-    ShutdownRequest, StatusRequest, StatusResponse, VersionRequest, VersionResponse,
+    CancelResponse, CommandRequest, CommandResponse, EchoRequest, EchoResponse, GetChildrenRequest,
+    GetChildrenResponse, HealthRequest, HealthResponse, PingRequest, PingResponse, ScanProgress,
+    ScanRequest, ScanResponse, ShutdownRequest, StatusRequest, StatusResponse, VersionRequest,
+    VersionResponse,
 };
 use pigtree_protocol::Message;
 use std::path::Path;
@@ -379,6 +380,29 @@ impl EngineClientSession {
             cancel_event,
             |r| match r {
                 command_response::Response::Version(v) => Some(v),
+                _ => None,
+            },
+        )
+    }
+
+    pub fn get_children(
+        &mut self,
+        operation_id: &str,
+        parent_id: u32,
+        offset: u32,
+        limit: u32,
+    ) -> Result<GetChildrenResponse, IpcError> {
+        self.send_rpc_request(
+            "get_children",
+            command_request::Request::GetChildren(GetChildrenRequest {
+                operation_id: operation_id.to_string(),
+                parent_id,
+                offset,
+                limit,
+            }),
+            None,
+            |r| match r {
+                command_response::Response::GetChildren(gc) => Some(gc),
                 _ => None,
             },
         )

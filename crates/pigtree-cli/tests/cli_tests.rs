@@ -1080,6 +1080,19 @@ fn test_cli_scan_valid_hierarchy_ndjson_mode() {
             assert!(payload.get("observed_directories").is_some());
             assert!(payload.get("observed_files").is_some());
             assert!(payload.get("observed_logical_bytes").is_some());
+            let cur_dir = payload
+                .get("current_directory")
+                .and_then(|v| v.as_str())
+                .expect("current_directory in progress payload");
+            assert!(!cur_dir.is_empty());
+            let norm_cur = cur_dir.strip_prefix("\\\\?\\").unwrap_or(cur_dir);
+            let norm_target = target_str.strip_prefix("\\\\?\\").unwrap_or(target_str);
+            assert!(
+                norm_cur.starts_with(norm_target),
+                "cur_dir: '{}', target_str: '{}'",
+                cur_dir,
+                target_str
+            );
         }
     }
 

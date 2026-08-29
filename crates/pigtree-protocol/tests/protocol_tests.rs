@@ -1,10 +1,11 @@
 use pigtree_protocol::protobuf::{
     command_request, command_response, decode_message, encode_message, AuthHandshakeRequest,
     AuthHandshakeResponse, CancelRequest, CancelResponse, CommandRequest, CommandResponse,
-    CoverageGapReport, EchoRequest, EchoResponse, ErrorResponse, HealthRequest, HealthResponse,
-    PingRequest, PingResponse, ScanProgress, ScanRequest, ScanResponse, ScanRunOutcome,
-    ScopeCoverage, ShutdownRequest, ShutdownResponse, StatusRequest, StatusResponse,
-    VersionRequest, VersionResponse,
+    CoverageGapReport, DirectoryEntryNode, EchoRequest, EchoResponse, ErrorResponse,
+    GetChildrenRequest, GetChildrenResponse, HealthRequest, HealthResponse, PingRequest,
+    PingResponse, ScanProgress, ScanRequest, ScanResponse, ScanRunOutcome, ScopeCoverage,
+    ShutdownRequest, ShutdownResponse, StatusRequest, StatusResponse, VersionRequest,
+    VersionResponse,
 };
 use pigtree_protocol::Message;
 
@@ -516,6 +517,7 @@ fn test_scan_progress_roundtrip() {
             observed_allocated_bytes: 536870912,
             coverage_gaps: 2,
             current_phase: "discovering".to_string(),
+            current_directory: r"C:DataTargetsub".to_string(),
         })),
     };
 
@@ -533,6 +535,7 @@ fn test_scan_progress_roundtrip() {
             assert_eq!(p.observed_allocated_bytes, 536870912);
             assert_eq!(p.coverage_gaps, 2);
             assert_eq!(p.current_phase, "discovering");
+            assert_eq!(p.current_directory, r"C:DataTargetsub");
         }
         other => panic!("expected ScanProgress variant, got {:?}", other),
     }
@@ -594,6 +597,142 @@ fn test_scan_response_roundtrip() {
         }
         other => panic!("expected ScanResponse variant, got {:?}", other),
     }
+}
+
+#[test]
+fn test_get_children_request_and_response_roundtrip() {
+    let req = CommandRequest {
+        request_id: "req-gc-001".to_string(),
+        request: Some(command_request::Request::GetChildren(GetChildrenRequest {
+            operation_id: "op-scan-123".to_string(),
+            parent_id: 1,
+            offset: 10,
+            limit: 50,
+        })),
+    };
+
+    let encoded_req = encode_message(&req);
+    let decoded_req: CommandRequest =
+        decode_message(&encoded_req).expect("decode GetChildrenRequest");
+    assert_eq!(decoded_req.request_id, "req-gc-001");
+    match decoded_req.request {
+        Some(command_request::Request::GetChildren(gc)) => {
+            assert_eq!(gc.operation_id, "op-scan-123");
+            assert_eq!(gc.parent_id, 1);
+            assert_eq!(gc.offset, 10);
+            assert_eq!(gc.limit, 50);
+        }
+        other => panic!("expected GetChildrenRequest, got {:?}", other),
+    }
+
+    let resp = CommandResponse {
+        request_id: "req-gc-001".to_string(),
+        status: 0,
+        error_code: String::new(),
+        error_message: String::new(),
+        response: Some(command_response::Response::GetChildren(
+            GetChildrenResponse {
+                operation_id: "op-scan-123".to_string(),
+                parent_id: 1,
+                total_children: 120,
+                offset: 10,
+                nodes: vec![
+                    DirectoryEntryNode {
+                        id: 2,
+                        parent_id: 1,
+                        name: "SubDir".to_string(),
+                        entry_kind: 1,
+                        logical_size: 0,
+                        allocated_size: 0,
+                        allocated_size_known: true,
+                        child_count: 5,
+                        has_children: true,
+                    },
+                    DirectoryEntryNode {
+                        id: 3,
+                        parent_id: 1,
+                        name: "file.txt".to_string(),
+                        entry_kind: 2,
+                        logical_size: 1024,
+                        allocated_size: 4096,
+                        allocated_size_known: true,
+                        child_count: 0,
+                        has_children: false,
+                    },
+                ],
+            },
+        )),
+    };
+
+    let encoded_resp = encode_message(&resp);
+    let decoded_resp: CommandResponse =
+        decode_message(&encoded_resp).expect("decode GetChildrenResponse");
+    assert_eq!(decoded_resp.request_id, "req-gc-001");
+    match decoded_resp.response {
+        Some(command_response::Response::GetChildren(r)) => {
+            assert_eq!(r.operation_id, "op-scan-123");
+            assert_eq!(r.parent_id, 1);
+            assert_eq!(r.total_children, 120);
+            assert_eq!(r.offset, 10);
+            assert_eq!(r.nodes.len(), 2);
+            assert_eq!(r.nodes[0].name, "SubDir");
+            assert_eq!(r.nodes[0].entry_kind, 1);
+            assert_eq!(r.nodes[0].child_count, 5);
+            assert!(r.nodes[0].has_children);
+            assert_eq!(r.nodes[1].name, "file.txt");
+            assert_eq!(r.nodes[1].entry_kind, 2);
+            assert_eq!(r.nodes[1].child_count, 0);
+            assert!(!r.nodes[1].has_children);
+        }
+        other => panic!("expected GetChildrenResponse, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_get_children_response_at_max_limit_encoded_size_under_max_payload() {
+    let mut nodes = Vec::with_capacity(500);
+    for i in 1..=500 {
+        nodes.push(DirectoryEntryNode {
+            id: i,
+            parent_id: 1,
+            name: format!("Very_Long_Directory_Or_File_Name_Entry_{}_Padding_With_Realistic_Windows_Characters.dat", i),
+            entry_kind: if i % 2 == 0 { 1 } else { 2 },
+            logical_size: 1024 * i as u64,
+            allocated_size: 4096 * i as u64,
+            allocated_size_known: true,
+            child_count: if i % 2 == 0 { 10 } else { 0 },
+            has_children: i % 2 == 0,
+        });
+    }
+
+    let resp = CommandResponse {
+        request_id: "req-max-page".to_string(),
+        status: 0,
+        error_code: String::new(),
+        error_message: String::new(),
+        response: Some(command_response::Response::GetChildren(
+            GetChildrenResponse {
+                operation_id: "op-large".to_string(),
+                parent_id: 1,
+                total_children: 10000,
+                offset: 0,
+                nodes,
+            },
+        )),
+    };
+
+    let encoded = encode_message(&resp);
+    assert!(
+        encoded.len() < pigtree_protocol::MAX_PAYLOAD_SIZE,
+        "encoded size {} must be below MAX_PAYLOAD_SIZE {}",
+        encoded.len(),
+        pigtree_protocol::MAX_PAYLOAD_SIZE
+    );
+    // In fact 500 items is around 60KB, well under 4MiB
+    assert!(
+        encoded.len() < 200 * 1024,
+        "encoded 500 nodes should be under 200KB"
+    );
 }
 
 #[test]
