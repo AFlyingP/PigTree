@@ -4,5 +4,6 @@ members = [
     "crates/pigtree-ipc",
     "crates/pigtree-engine",
     "crates/pigtree-cli",
+    "crates/pigtree-scan-worker",
 ]
 resolver = "2"

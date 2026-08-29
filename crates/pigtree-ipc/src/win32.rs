@@ -5,6 +5,7 @@
 compile_error!("PigTree targets 64-bit Windows (x86_64) only");
 
 use std::ffi::c_void;
+use std::ptr::null_mut;
 
 pub type HANDLE = *mut c_void;
 pub type BOOL = i32;
@@ -39,10 +40,22 @@ pub const FILE_FLAG_OVERLAPPED: DWORD = 0x40000000;
 pub const SECURITY_SQOS_PRESENT: DWORD = 0x00100000;
 pub const SECURITY_IDENTIFICATION: DWORD = 0x00010000;
 
+// Drive types
+pub const DRIVE_UNKNOWN: DWORD = 0;
+pub const DRIVE_NO_ROOT_DIR: DWORD = 1;
+pub const DRIVE_REMOVABLE: DWORD = 2;
+pub const DRIVE_FIXED: DWORD = 3;
+pub const DRIVE_REMOTE: DWORD = 4;
+pub const DRIVE_CDROM: DWORD = 5;
+pub const DRIVE_RAMDISK: DWORD = 6;
+
 // Win32 Error codes
 pub const ERROR_FILE_NOT_FOUND: DWORD = 2;
+pub const ERROR_INVALID_HANDLE: DWORD = 6;
+pub const ERROR_HANDLE_EOF: DWORD = 38;
 pub const ERROR_BROKEN_PIPE: DWORD = 109;
 pub const ERROR_PIPE_BUSY: DWORD = 231;
+pub const ERROR_PIPE_NOT_CONNECTED: DWORD = 233;
 pub const ERROR_PIPE_CONNECTED: DWORD = 535;
 pub const ERROR_OPERATION_ABORTED: DWORD = 995;
 pub const ERROR_IO_PENDING: DWORD = 997;
@@ -212,6 +225,16 @@ extern "system" {
     pub fn GetCurrentProcess() -> HANDLE;
     pub fn GetCurrentProcessId() -> DWORD;
 
+    pub fn FormatMessageW(
+        dwFlags: DWORD,
+        lpSource: *const c_void,
+        dwMessageId: DWORD,
+        dwLanguageId: DWORD,
+        lpBuffer: LPWSTR,
+        nSize: DWORD,
+        Arguments: *mut c_void,
+    ) -> DWORD;
+
     pub fn CreateEventW(
         lpEventAttributes: *mut SECURITY_ATTRIBUTES,
         bManualReset: BOOL,
@@ -302,6 +325,25 @@ extern "system" {
     ) -> BOOL;
 
     pub fn FlushFileBuffers(hFile: HANDLE) -> BOOL;
+
+    pub fn GetVolumePathNameW(
+        lpszFileName: LPCWSTR,
+        lpszVolumePathName: LPWSTR,
+        cchBufferLength: DWORD,
+    ) -> BOOL;
+
+    pub fn GetDriveTypeW(lpRootPathName: LPCWSTR) -> DWORD;
+
+    pub fn GetVolumeInformationW(
+        lpRootPathName: LPCWSTR,
+        lpVolumeNameBuffer: LPWSTR,
+        nVolumeNameSize: DWORD,
+        lpVolumeSerialNumber: *mut DWORD,
+        lpMaximumComponentLength: *mut DWORD,
+        lpFileSystemFlags: *mut DWORD,
+        lpFileSystemNameBuffer: LPWSTR,
+        nFileSystemNameSize: DWORD,
+    ) -> BOOL;
 
     pub fn GetOverlappedResult(
         hFile: HANDLE,
@@ -563,5 +605,29 @@ pub fn get_process_command_line(pid: u32) -> Result<String, crate::error::IpcErr
         }
 
         Ok(String::from_utf16_lossy(&wide_buf))
+    }
+}
+
+/// Helper to format a Win32 system error code into a human-readable message.
+pub fn format_win32_error(code: u32) -> String {
+    const FORMAT_MESSAGE_FROM_SYSTEM: DWORD = 0x00001000;
+    const FORMAT_MESSAGE_IGNORE_INSERTS: DWORD = 0x00000200;
+    let mut buf = [0u16; 512];
+    unsafe {
+        let len = FormatMessageW(
+            FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+            null_mut(),
+            code,
+            0,
+            buf.as_mut_ptr(),
+            buf.len() as DWORD,
+            null_mut(),
+        );
+        if len > 0 {
+            let msg = String::from_utf16_lossy(&buf[..len as usize]);
+            msg.trim().to_string()
+        } else {
+            format!("Win32 error {code}")
+        }
     }
 }

@@ -5,16 +5,23 @@ use crate::error::IpcError;
 use crate::job::JobObject;
 use crate::pipe::{format_pipe_name, NamedPipeClient};
 use crate::security::{constant_time_eq, derive_channel_key, generate_nonce};
-use crate::transport::FramedSession;
+use crate::transport::{FrameReadiness, FramedSession};
 use crate::win32::*;
 use pigtree_protocol::frame::{ChannelTag, FrameFlags};
 use pigtree_protocol::protobuf::{
     command_request, command_response, AuthHandshakeRequest, AuthHandshakeResponse, CancelRequest,
     CancelResponse, CommandRequest, CommandResponse, EchoRequest, EchoResponse, HealthRequest,
-    HealthResponse, PingRequest, PingResponse, ShutdownRequest, StatusRequest, StatusResponse,
-    VersionRequest, VersionResponse,
+    HealthResponse, PingRequest, PingResponse, ScanProgress, ScanRequest, ScanResponse,
+    ShutdownRequest, StatusRequest, StatusResponse, VersionRequest, VersionResponse,
 };
+use pigtree_protocol::Message;
 use std::path::Path;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScanCallOutcome {
+    Finished(ScanResponse),
+    Cancelled(ScanResponse),
+}
 
 pub struct EngineClientSession {
     job_object: JobObject,
@@ -152,6 +159,10 @@ impl EngineClientSession {
         &self.job_object
     }
 
+    pub fn peek_frame_readiness(&self) -> Result<FrameReadiness, IpcError> {
+        self.framed.peek_frame_readiness()
+    }
+
     pub fn send_command(&mut self, req: CommandRequest) -> Result<CommandResponse, IpcError> {
         self.send_command_interruptible(req, None)
     }
@@ -163,13 +174,26 @@ impl EngineClientSession {
     ) -> Result<CommandResponse, IpcError> {
         self.framed
             .send_message(ChannelTag::Command, FrameFlags::empty(), &req)?;
-        let (_, resp) = self
-            .framed
-            .recv_message_interruptible::<CommandResponse>(cancel_event, None)?
-            .ok_or(IpcError::Protocol(
-                pigtree_protocol::FrameParseError::PrematureEof,
-            ))?;
-        Ok(resp)
+
+        loop {
+            if let Some(ce) = cancel_event {
+                let wait_res = unsafe { WaitForSingleObject(ce, 0) };
+                if wait_res == WAIT_OBJECT_0 {
+                    return Err(IpcError::Cancelled);
+                }
+            }
+            match self.framed.peek_frame_readiness()? {
+                FrameReadiness::Complete => {
+                    let (_, resp) = self.framed.recv_message::<CommandResponse>()?.ok_or(
+                        IpcError::Protocol(pigtree_protocol::FrameParseError::PrematureEof),
+                    )?;
+                    return Ok(resp);
+                }
+                FrameReadiness::Empty | FrameReadiness::Partial => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+        }
     }
 
     pub fn cancel_request(&mut self, target_request_id: &str) -> Result<CancelResponse, IpcError> {
@@ -182,24 +206,36 @@ impl EngineClientSession {
             })),
         };
 
-        // Send cancel request on CancellationHeartbeat channel
+        // Send cancel request on Command channel
         self.framed
-            .send_message(ChannelTag::CancellationHeartbeat, FrameFlags::empty(), &req)?;
+            .send_message(ChannelTag::Command, FrameFlags::empty(), &req)?;
 
-        // Wait bounded time for acknowledgment (up to 3000ms)
-        let (_, resp) = self
-            .framed
-            .recv_message_interruptible::<CommandResponse>(None, Some(3000))?
-            .ok_or(IpcError::Protocol(
-                pigtree_protocol::FrameParseError::PrematureEof,
-            ))?;
-
-        match resp.response {
-            Some(command_response::Response::Cancel(cancel_resp)) => Ok(cancel_resp),
-            _ => Ok(CancelResponse {
-                cancelled: true,
-                message: "Request cancelled".to_string(),
-            }),
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(3000);
+        loop {
+            if std::time::Instant::now() >= deadline {
+                return Err(IpcError::Timeout);
+            }
+            match self.framed.peek_frame_readiness()? {
+                FrameReadiness::Complete => {
+                    let (_, resp) = self.framed.recv_message::<CommandResponse>()?.ok_or(
+                        IpcError::Protocol(pigtree_protocol::FrameParseError::PrematureEof),
+                    )?;
+                    match resp.response {
+                        Some(command_response::Response::Cancel(cancel_resp)) => {
+                            return Ok(cancel_resp);
+                        }
+                        _ => {
+                            return Ok(CancelResponse {
+                                cancelled: true,
+                                message: "Request cancelled".to_string(),
+                            });
+                        }
+                    }
+                }
+                FrameReadiness::Empty | FrameReadiness::Partial => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
         }
     }
 
@@ -218,7 +254,10 @@ impl EngineClientSession {
 
         let resp = self.send_command_interruptible(req, cancel_event)?;
         if resp.status != 0 {
-            return Err(IpcError::AuthenticationFailed(resp.error_message));
+            return Err(IpcError::CommandError {
+                code: resp.error_code,
+                message: resp.error_message,
+            });
         }
         match resp.response {
             Some(r) => extract(r).ok_or(IpcError::Protocol(
@@ -343,6 +382,181 @@ impl EngineClientSession {
                 _ => None,
             },
         )
+    }
+
+    pub fn scan(&mut self, target_path: &str) -> Result<ScanResponse, IpcError> {
+        self.scan_with_progress(target_path, None::<fn(ScanProgress)>, None)
+    }
+
+    pub fn scan_with_progress<F>(
+        &mut self,
+        target_path: &str,
+        on_progress: Option<F>,
+        cancel_event: Option<HANDLE>,
+    ) -> Result<ScanResponse, IpcError>
+    where
+        F: FnMut(ScanProgress),
+    {
+        match self.scan_with_progress_outcome(target_path, on_progress, cancel_event)? {
+            ScanCallOutcome::Finished(sr) => Ok(sr),
+            ScanCallOutcome::Cancelled(_) => Err(IpcError::Cancelled),
+        }
+    }
+
+    pub fn scan_with_progress_outcome<F>(
+        &mut self,
+        target_path: &str,
+        mut on_progress: Option<F>,
+        cancel_event: Option<HANDLE>,
+    ) -> Result<ScanCallOutcome, IpcError>
+    where
+        F: FnMut(ScanProgress),
+    {
+        let operation_id = format!("scan-{}", self.framed.next_seq());
+        let req = CommandRequest {
+            request_id: operation_id.clone(),
+            request: Some(command_request::Request::Scan(ScanRequest {
+                operation_id: operation_id.clone(),
+                target_path: target_path.to_string(),
+            })),
+        };
+
+        self.framed
+            .send_message(ChannelTag::Command, FrameFlags::empty(), &req)?;
+
+        let mut last_progress_seq: u64 = 0;
+        let mut cancel_sent = false;
+        let mut cancel_deadline: Option<std::time::Instant> = None;
+
+        loop {
+            // Poll cancel_event separately with WaitForSingleObject
+            if !cancel_sent {
+                if let Some(ce) = cancel_event {
+                    let wait_res = unsafe { WaitForSingleObject(ce, 0) };
+                    if wait_res == WAIT_OBJECT_0 {
+                        let cancel_req = CommandRequest {
+                            request_id: format!("cancel-{}", self.framed.next_seq()),
+                            request: Some(command_request::Request::Cancel(CancelRequest {
+                                target_request_id: operation_id.clone(),
+                                reason: "Scan cancelled by client".to_string(),
+                            })),
+                        };
+                        self.framed.send_message(
+                            ChannelTag::Command,
+                            FrameFlags::empty(),
+                            &cancel_req,
+                        )?;
+                        cancel_sent = true;
+                        cancel_deadline = Some(
+                            std::time::Instant::now() + std::time::Duration::from_millis(2000),
+                        );
+                    }
+                }
+            }
+
+            // If cancellation was initiated, enforce hard 2-second terminal deadline
+            if let Some(deadline) = cancel_deadline {
+                if std::time::Instant::now() >= deadline {
+                    return Err(IpcError::Cancelled);
+                }
+            }
+
+            match self.framed.peek_frame_readiness()? {
+                FrameReadiness::Complete => {
+                    let frame = self.framed.recv_frame()?.ok_or(IpcError::Protocol(
+                        pigtree_protocol::FrameParseError::PrematureEof,
+                    ))?;
+
+                    match frame.header.channel_tag {
+                        ChannelTag::ProgressPulse => {
+                            let resp = CommandResponse::decode(&frame.payload[..])?;
+                            match resp.response {
+                                Some(command_response::Response::ScanProgress(p)) => {
+                                    if p.operation_id != operation_id {
+                                        return Err(IpcError::Protocol(
+                                            pigtree_protocol::FrameParseError::ChecksumMismatch {
+                                                expected: 0,
+                                                calculated: 0,
+                                            },
+                                        ));
+                                    }
+                                    if p.sequence_number <= last_progress_seq {
+                                        return Err(IpcError::Protocol(
+                                            pigtree_protocol::FrameParseError::ChecksumMismatch {
+                                                expected: 0,
+                                                calculated: 0,
+                                            },
+                                        ));
+                                    }
+                                    last_progress_seq = p.sequence_number;
+                                    if let Some(cb) = on_progress.as_mut() {
+                                        cb(p);
+                                    }
+                                }
+                                _ => {
+                                    return Err(IpcError::Protocol(
+                                        pigtree_protocol::FrameParseError::PrematureEof,
+                                    ));
+                                }
+                            }
+                        }
+                        ChannelTag::Command => {
+                            let resp = CommandResponse::decode(&frame.payload[..])?;
+                            if resp.request_id != operation_id
+                                && !resp.request_id.is_empty()
+                                && resp.request_id != req.request_id
+                            {
+                                return Err(IpcError::Protocol(
+                                    pigtree_protocol::FrameParseError::PrematureEof,
+                                ));
+                            }
+                            if resp.status != 0 {
+                                return Err(IpcError::CommandError {
+                                    code: resp.error_code,
+                                    message: resp.error_message,
+                                });
+                            }
+                            match resp.response {
+                                Some(command_response::Response::ScanResponse(sr)) => {
+                                    if sr.operation_id != operation_id {
+                                        return Err(IpcError::Protocol(
+                                            pigtree_protocol::FrameParseError::PrematureEof,
+                                        ));
+                                    }
+                                    if cancel_sent
+                                        || sr.run_outcome
+                                            == pigtree_protocol::protobuf::ScanRunOutcome::Cancelled
+                                                as i32
+                                    {
+                                        return Ok(ScanCallOutcome::Cancelled(sr));
+                                    }
+                                    return Ok(ScanCallOutcome::Finished(sr));
+                                }
+                                Some(command_response::Response::Error(err_resp)) => {
+                                    return Err(IpcError::CommandError {
+                                        code: err_resp.code,
+                                        message: err_resp.message,
+                                    });
+                                }
+                                _ => {
+                                    return Err(IpcError::Protocol(
+                                        pigtree_protocol::FrameParseError::PrematureEof,
+                                    ));
+                                }
+                            }
+                        }
+                        other => {
+                            return Err(IpcError::Protocol(
+                                pigtree_protocol::FrameParseError::InvalidChannelTag(other as u8),
+                            ));
+                        }
+                    }
+                }
+                FrameReadiness::Empty | FrameReadiness::Partial => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+        }
     }
 
     pub fn shutdown(&mut self) -> Result<(), IpcError> {

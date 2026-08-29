@@ -3,6 +3,7 @@
 pub mod crc32c;
 pub mod frame;
 pub mod json;
+pub mod observation;
 pub mod protobuf;
 pub mod sha256;
 
@@ -15,6 +16,11 @@ pub use json::{
     escape_json_string, format_cancelled_envelope, format_diagnostic, format_echo_response,
     format_error_envelope, format_health_response, format_ping_response, format_status_response,
     format_success_envelope, format_version_response,
+};
+pub use observation::{
+    CoverageGapObservation, DirectoryObservation, FileObservation, ObservationDecodeError,
+    ObservationReader, ObservationRecord, ObservationWriter, RecordTag, RunOutcome,
+    SpecialObservation, TerminalObservation, WORKER_MAGIC, WORKER_STREAM_VERSION,
 };
 pub use prost::Message;
 pub use protobuf::*;

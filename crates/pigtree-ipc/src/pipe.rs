@@ -107,7 +107,7 @@ impl PipeStream {
         };
         if res == 0 {
             let err = unsafe { GetLastError() };
-            if err == ERROR_BROKEN_PIPE {
+            if err == ERROR_BROKEN_PIPE || err == ERROR_PIPE_NOT_CONNECTED {
                 return Ok(false);
             }
             return Err(IpcError::Win32 {
@@ -116,6 +116,92 @@ impl PipeStream {
             });
         }
         Ok(bytes_avail > 0)
+    }
+
+    pub fn peek_frame_readiness(&self) -> Result<crate::transport::FrameReadiness, IpcError> {
+        let mut header_buf = [0u8; pigtree_protocol::frame::HEADER_SIZE];
+        let mut bytes_read: DWORD = 0;
+        let mut bytes_avail: DWORD = 0;
+        let res = unsafe {
+            PeekNamedPipe(
+                self.handle,
+                header_buf.as_mut_ptr() as *mut c_void,
+                pigtree_protocol::frame::HEADER_SIZE as DWORD,
+                &mut bytes_read,
+                &mut bytes_avail,
+                null_mut(),
+            )
+        };
+        if res == 0 {
+            let err = unsafe { GetLastError() };
+            if err == ERROR_BROKEN_PIPE || err == ERROR_PIPE_NOT_CONNECTED {
+                return Err(IpcError::Io(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "broken pipe",
+                )));
+            }
+            return Err(IpcError::Win32 {
+                code: err,
+                message: "PeekNamedPipe failed".to_string(),
+            });
+        }
+
+        if bytes_avail == 0 {
+            return Ok(crate::transport::FrameReadiness::Empty);
+        }
+
+        if (bytes_avail as usize) < pigtree_protocol::frame::HEADER_SIZE {
+            return Ok(crate::transport::FrameReadiness::Partial);
+        }
+
+        if (bytes_read as usize) < pigtree_protocol::frame::HEADER_SIZE {
+            return Ok(crate::transport::FrameReadiness::Partial);
+        }
+
+        let magic: [u8; 2] = [header_buf[0], header_buf[1]];
+        if magic != pigtree_protocol::frame::MAGIC {
+            return Err(IpcError::Protocol(
+                pigtree_protocol::frame::FrameParseError::InvalidMagic(magic),
+            ));
+        }
+
+        let version = u16::from_le_bytes([header_buf[2], header_buf[3]]);
+        if version != pigtree_protocol::frame::SCHEMA_VERSION {
+            return Err(IpcError::Protocol(
+                pigtree_protocol::frame::FrameParseError::UnsupportedVersion(version),
+            ));
+        }
+
+        let _channel_tag = pigtree_protocol::frame::ChannelTag::from_u8(header_buf[4])
+            .map_err(IpcError::Protocol)?;
+
+        let reserved = u16::from_le_bytes([header_buf[6], header_buf[7]]);
+        if reserved != 0 {
+            return Err(IpcError::Protocol(
+                pigtree_protocol::frame::FrameParseError::InvalidReserved(reserved),
+            ));
+        }
+
+        let payload_len = u32::from_le_bytes([
+            header_buf[16],
+            header_buf[17],
+            header_buf[18],
+            header_buf[19],
+        ]) as usize;
+        if payload_len > pigtree_protocol::frame::MAX_PAYLOAD_SIZE {
+            return Err(IpcError::Protocol(
+                pigtree_protocol::frame::FrameParseError::PayloadTooLarge(payload_len),
+            ));
+        }
+
+        let total_frame_len =
+            pigtree_protocol::frame::HEADER_SIZE + payload_len + pigtree_protocol::frame::CRC_SIZE;
+
+        if (bytes_avail as usize) < total_frame_len {
+            Ok(crate::transport::FrameReadiness::Partial)
+        } else {
+            Ok(crate::transport::FrameReadiness::Complete)
+        }
     }
 
     pub fn read_overlapped(
@@ -260,8 +346,8 @@ impl PipeStream {
     pub fn write_overlapped(
         &mut self,
         buf: &[u8],
-        _cancel_event: Option<HANDLE>,
-        _timeout_ms: Option<u32>,
+        cancel_event: Option<HANDLE>,
+        timeout_ms: Option<u32>,
     ) -> Result<usize, IpcError> {
         if buf.is_empty() {
             return Ok(0);
@@ -304,37 +390,102 @@ impl PipeStream {
         }
 
         let err = unsafe { GetLastError() };
-        if err == ERROR_IO_PENDING {
+        if err == ERROR_BROKEN_PIPE {
+            return Err(IpcError::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "broken pipe",
+            )));
+        }
+        if err != ERROR_IO_PENDING {
+            return Err(IpcError::Win32 {
+                code: err,
+                message: "WriteFile failed".to_string(),
+            });
+        }
+
+        let mut handles = [h_event, null_mut()];
+        let count = if let Some(ce) = cancel_event {
+            handles[1] = ce;
+            2
+        } else {
+            1
+        };
+
+        let wait_res = unsafe {
+            WaitForMultipleObjects(
+                count,
+                handles.as_ptr(),
+                FALSE,
+                timeout_ms.unwrap_or(INFINITE),
+            )
+        };
+
+        if wait_res == WAIT_OBJECT_0 {
             let mut transferred: DWORD = 0;
             let res = unsafe {
-                GetOverlappedResult(self.handle, &mut overlapped, &mut transferred, TRUE)
+                GetOverlappedResult(self.handle, &mut overlapped, &mut transferred, FALSE)
             };
             if res != 0 {
                 Ok(transferred as usize)
             } else {
                 let err = unsafe { GetLastError() };
                 if err == ERROR_BROKEN_PIPE {
-                    return Err(IpcError::Io(io::Error::new(
+                    Err(IpcError::Io(io::Error::new(
                         io::ErrorKind::BrokenPipe,
                         "broken pipe",
-                    )));
+                    )))
+                } else {
+                    Err(IpcError::Win32 {
+                        code: err,
+                        message: "GetOverlappedResult write failed".to_string(),
+                    })
                 }
-                Err(IpcError::Win32 {
-                    code: err,
-                    message: "GetOverlappedResult write failed".to_string(),
-                })
             }
-        } else if err == ERROR_BROKEN_PIPE {
-            Err(IpcError::Io(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "broken pipe",
-            )))
+        } else if count == 2 && wait_res == WAIT_OBJECT_0 + 1 {
+            unsafe {
+                CancelIoEx(self.handle, &mut overlapped);
+                let mut dummy: DWORD = 0;
+                GetOverlappedResult(self.handle, &mut overlapped, &mut dummy, TRUE);
+            }
+            Err(IpcError::Cancelled)
+        } else if wait_res == WAIT_TIMEOUT {
+            unsafe {
+                CancelIoEx(self.handle, &mut overlapped);
+                let mut dummy: DWORD = 0;
+                GetOverlappedResult(self.handle, &mut overlapped, &mut dummy, TRUE);
+            }
+            Err(IpcError::Timeout)
         } else {
+            let err = unsafe { GetLastError() };
+            unsafe {
+                CancelIoEx(self.handle, &mut overlapped);
+                let mut dummy: DWORD = 0;
+                GetOverlappedResult(self.handle, &mut overlapped, &mut dummy, TRUE);
+            }
             Err(IpcError::Win32 {
                 code: err,
-                message: "WriteFile failed".to_string(),
+                message: "WaitForMultipleObjects failed on write".to_string(),
             })
         }
+    }
+
+    pub fn write_exact_interruptible(
+        &mut self,
+        mut buf: &[u8],
+        cancel_event: Option<HANDLE>,
+        timeout_ms: Option<u32>,
+    ) -> Result<(), IpcError> {
+        while !buf.is_empty() {
+            let n = self.write_overlapped(buf, cancel_event, timeout_ms)?;
+            if n == 0 {
+                return Err(IpcError::Io(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "write zero bytes",
+                )));
+            }
+            buf = &buf[n..];
+        }
+        Ok(())
     }
 }
 
@@ -356,17 +507,7 @@ impl Write for PipeStream {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        let success = unsafe { FlushFileBuffers(self.handle) };
-        if success != 0 {
-            Ok(())
-        } else {
-            let err = unsafe { GetLastError() };
-            if err == ERROR_BROKEN_PIPE {
-                Ok(())
-            } else {
-                Err(io::Error::from_raw_os_error(err as i32))
-            }
-        }
+        Ok(())
     }
 }
 

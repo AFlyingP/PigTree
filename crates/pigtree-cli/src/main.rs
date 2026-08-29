@@ -1,12 +1,18 @@
 //! Command-line interface and automation client (pigtree.exe).
 
-use pigtree_ipc::client::EngineClientSession;
+use pigtree_cli::{
+    settle_scan_outcome, OutputFormat, EXIT_CANCELLED, EXIT_COMMAND_ERROR, EXIT_OPERATION_FAILED,
+    EXIT_SUCCESS,
+};
+use pigtree_ipc::client::{EngineClientSession, ScanCallOutcome};
 use pigtree_ipc::win32::*;
 use pigtree_protocol::json::{
     format_cancelled_envelope, format_diagnostic, format_echo_response, format_error_envelope,
-    format_health_response, format_ping_response, format_status_response, format_success_envelope,
+    format_health_response, format_ping_response, format_scan_cancelled_ndjson_event,
+    format_scan_progress_ndjson_event, format_status_response, format_success_envelope,
     format_version_response,
 };
+use pigtree_protocol::protobuf::ScanProgress;
 use std::env;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
@@ -68,6 +74,7 @@ USAGE:
     pigtree.exe [OPTIONS] <SUBCOMMAND>
 
 SUBCOMMANDS:
+    scan <DIR>                 Traverse directory tree and report disk allocation statistics
     health [--include-memory]  Query session host engine health, uptime, and resource usage
     ping                       Send timestamp ping request to engine session
     echo <TEXT>                Echo text payload through engine session
@@ -95,7 +102,7 @@ fn handle_rpc_result<T>(
         Ok(resp) => {
             let data_json = formatter(&resp);
             println!("{}", format_success_envelope(verb, &data_json));
-            0
+            EXIT_SUCCESS
         }
         Err(pigtree_ipc::IpcError::Cancelled) => {
             let _ = session.cancel_request(verb);
@@ -107,13 +114,13 @@ fn handle_rpc_result<T>(
                 "{}",
                 format_cancelled_envelope(verb, "Operation cancelled by user")
             );
-            3
+            EXIT_CANCELLED
         }
         Err(err) => {
             let msg = format!("{verb} failed: {err}");
             eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &msg));
             println!("{}", format_error_envelope(verb, "OPERATION_FAILED", &msg));
-            1
+            EXIT_OPERATION_FAILED
         }
     }
 }
@@ -155,11 +162,11 @@ fn run() -> u8 {
             "{}",
             format_error_envelope("cli", "COMMAND_ERROR", "No subcommand specified")
         );
-        return 2;
+        return EXIT_COMMAND_ERROR;
     }
 
     let mut engine_path_override: Option<String> = None;
-    let mut _format = "json".to_string();
+    let mut format = OutputFormat::Json;
     let mut subcommand: Option<String> = None;
     let mut sub_args: Vec<String> = Vec::new();
     let mut test_delay_ms: u32 = env::var("PIGTREE_TEST_DELAY_MS")
@@ -172,7 +179,7 @@ fn run() -> u8 {
         match args[i].as_str() {
             "-h" | "--help" | "help" => {
                 print_help();
-                return 0;
+                return EXIT_SUCCESS;
             }
             "-V" | "--version" => {
                 let ver_json = format!(
@@ -180,7 +187,7 @@ fn run() -> u8 {
                     env!("CARGO_PKG_VERSION")
                 );
                 println!("{}", format_success_envelope("cli-version", &ver_json));
-                return 0;
+                return EXIT_SUCCESS;
             }
             "--engine-path" => {
                 if i + 1 < args.len() && !args[i + 1].starts_with("--") {
@@ -203,7 +210,7 @@ fn run() -> u8 {
                             "Missing value for --engine-path"
                         )
                     );
-                    return 2;
+                    return EXIT_COMMAND_ERROR;
                 }
             }
             "--test-delay-ms" => {
@@ -229,21 +236,22 @@ fn run() -> u8 {
                             "Missing value for --test-delay-ms"
                         )
                     );
-                    return 2;
+                    return EXIT_COMMAND_ERROR;
                 }
             }
             "--format" => {
                 if i + 1 < args.len() && !args[i + 1].starts_with("--") {
                     let fmt_val = &args[i + 1];
-                    if fmt_val != "json" && fmt_val != "ndjson" {
-                        let msg = format!(
-                            "Invalid value for --format: '{fmt_val}'. Expected 'json' or 'ndjson'"
-                        );
-                        eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &msg));
-                        println!("{}", format_error_envelope("cli", "COMMAND_ERROR", &msg));
-                        return 2;
+                    match fmt_val.parse::<OutputFormat>() {
+                        Ok(fmt) => {
+                            format = fmt;
+                        }
+                        Err(err) => {
+                            eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &err));
+                            println!("{}", format_error_envelope("cli", "COMMAND_ERROR", &err));
+                            return EXIT_COMMAND_ERROR;
+                        }
                     }
-                    _format = fmt_val.clone();
                     i += 1;
                 } else {
                     eprintln!(
@@ -254,11 +262,11 @@ fn run() -> u8 {
                         "{}",
                         format_error_envelope("cli", "COMMAND_ERROR", "Missing value for --format")
                     );
-                    return 2;
+                    return EXIT_COMMAND_ERROR;
                 }
             }
             "--json" => {
-                _format = "json".to_string();
+                format = OutputFormat::Json;
             }
             other if !other.starts_with('-') && subcommand.is_none() => {
                 subcommand = Some(other.to_string());
@@ -281,16 +289,63 @@ fn run() -> u8 {
                 "{}",
                 format_error_envelope("cli", "COMMAND_ERROR", "No subcommand specified")
             );
-            return 2;
+            return EXIT_COMMAND_ERROR;
         }
     };
 
-    let valid_subcommands = ["ping", "echo", "health", "status", "version", "shutdown"];
+    let valid_subcommands = [
+        "ping", "echo", "health", "status", "version", "shutdown", "scan",
+    ];
     if !valid_subcommands.contains(&cmd.as_str()) {
         let msg = format!("Unknown subcommand: {cmd}");
         eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &msg));
         println!("{}", format_error_envelope("cli", "COMMAND_ERROR", &msg));
-        return 2;
+        return EXIT_COMMAND_ERROR;
+    }
+
+    // Pre-flight argument and target directory validation for scan
+    if cmd == "scan" {
+        if sub_args.is_empty() {
+            let msg = "Missing target directory argument for scan";
+            eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", msg));
+            println!("{}", format_error_envelope("cli", "COMMAND_ERROR", msg));
+            return EXIT_COMMAND_ERROR;
+        }
+        if sub_args.len() > 1 {
+            let msg = format!(
+                "Exactly one target directory argument required, found {}",
+                sub_args.len()
+            );
+            eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &msg));
+            println!("{}", format_error_envelope("cli", "COMMAND_ERROR", &msg));
+            return EXIT_COMMAND_ERROR;
+        }
+        let target_raw = &sub_args[0];
+        if target_raw.trim().is_empty() {
+            let msg = "Target directory path cannot be empty";
+            eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", msg));
+            println!("{}", format_error_envelope("cli", "COMMAND_ERROR", msg));
+            return EXIT_COMMAND_ERROR;
+        }
+        if pigtree_ipc::validator::is_lexical_unc(target_raw) {
+            let msg = format!("UNC and network paths are not supported: {target_raw}");
+            eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &msg));
+            println!("{}", format_error_envelope("scan", "INVALID_TARGET", &msg));
+            return EXIT_COMMAND_ERROR;
+        }
+        let target_p = Path::new(target_raw);
+        if !target_p.exists() {
+            let msg = format!("Target directory does not exist: {target_raw}");
+            eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &msg));
+            println!("{}", format_error_envelope("scan", "INVALID_TARGET", &msg));
+            return EXIT_COMMAND_ERROR;
+        }
+        if !target_p.is_dir() {
+            let msg = format!("Target path is not a directory: {target_raw}");
+            eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &msg));
+            println!("{}", format_error_envelope("scan", "INVALID_TARGET", &msg));
+            return EXIT_COMMAND_ERROR;
+        }
     }
 
     if CANCELLED.load(Ordering::SeqCst) {
@@ -298,11 +353,18 @@ fn run() -> u8 {
             "{}",
             format_diagnostic("WARN", "pigtree_cli", "Operation cancelled by user")
         );
-        println!(
-            "{}",
-            format_cancelled_envelope(&cmd, "Operation cancelled by user")
-        );
-        return 3;
+        if cmd == "scan" && format == OutputFormat::Ndjson {
+            println!(
+                "{}",
+                format_scan_cancelled_ndjson_event("scan", 1, None, "Operation cancelled by user")
+            );
+        } else {
+            println!(
+                "{}",
+                format_cancelled_envelope(&cmd, "Operation cancelled by user")
+            );
+        }
+        return EXIT_CANCELLED;
     }
 
     let engine_binary = match find_engine_binary(engine_path_override.as_deref()) {
@@ -310,7 +372,7 @@ fn run() -> u8 {
         Err(err) => {
             eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &err));
             println!("{}", format_error_envelope("cli", "OPERATION_FAILED", &err));
-            return 1;
+            return EXIT_OPERATION_FAILED;
         }
     };
 
@@ -329,7 +391,7 @@ fn run() -> u8 {
             let msg = format!("Failed to spawn private engine host: {err}");
             eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &msg));
             println!("{}", format_error_envelope("cli", "OPERATION_FAILED", &msg));
-            return 1;
+            return EXIT_OPERATION_FAILED;
         }
     };
 
@@ -353,11 +415,18 @@ fn run() -> u8 {
             "{}",
             format_diagnostic("WARN", "pigtree_cli", "Operation cancelled by user")
         );
-        println!(
-            "{}",
-            format_cancelled_envelope(&cmd, "Operation cancelled by user")
-        );
-        return 3;
+        if cmd == "scan" && format == OutputFormat::Ndjson {
+            println!(
+                "{}",
+                format_scan_cancelled_ndjson_event("scan", 1, None, "Operation cancelled by user")
+            );
+        } else {
+            println!(
+                "{}",
+                format_cancelled_envelope(&cmd, "Operation cancelled by user")
+            );
+        }
+        return EXIT_CANCELLED;
     }
 
     let cancel_opt = if !h_cancel.is_null() && h_cancel != INVALID_HANDLE_VALUE {
@@ -409,7 +478,7 @@ fn run() -> u8 {
                     "{}",
                     format_success_envelope("shutdown", r#"{"shutdown":true}"#)
                 );
-                0
+                EXIT_SUCCESS
             }
             Err(err) => {
                 let msg = format!("Shutdown failed: {err}");
@@ -418,14 +487,109 @@ fn run() -> u8 {
                     "{}",
                     format_error_envelope("shutdown", "OPERATION_FAILED", &msg)
                 );
-                1
+                EXIT_OPERATION_FAILED
             }
         },
+        "scan" => {
+            let target_raw = &sub_args[0];
+            let is_ndjson = format == OutputFormat::Ndjson;
+            let mut last_progress_seq: u64 = 0;
+
+            let progress_cb = |p: ScanProgress| {
+                last_progress_seq = p.sequence_number;
+                if is_ndjson {
+                    let line = format_scan_progress_ndjson_event(&p);
+                    println!("{line}");
+                } else {
+                    let msg = format!(
+                        "traversing: {} directories, {} files, {} bytes (phase: {})",
+                        p.observed_directories,
+                        p.observed_files,
+                        p.observed_logical_bytes,
+                        p.current_phase
+                    );
+                    eprintln!("{}", format_diagnostic("INFO", "pigtree_scan", &msg));
+                }
+            };
+
+            let outcome =
+                session.scan_with_progress_outcome(target_raw, Some(progress_cb), cancel_opt);
+
+            match outcome {
+                Ok(outcome @ ScanCallOutcome::Finished(_)) => {
+                    let term_seq = last_progress_seq + 1;
+                    let settlement = settle_scan_outcome(format, &outcome, term_seq);
+                    println!("{}", settlement.stdout);
+                    let _ = session.shutdown();
+                    settlement.exit_code
+                }
+                Ok(outcome @ ScanCallOutcome::Cancelled(_)) => {
+                    let term_seq = last_progress_seq + 1;
+                    let settlement = settle_scan_outcome(format, &outcome, term_seq);
+                    println!("{}", settlement.stdout);
+                    eprintln!(
+                        "{}",
+                        format_diagnostic(
+                            "WARN",
+                            "pigtree_cli",
+                            "Scan operation cancelled by user"
+                        )
+                    );
+                    let _ = session.shutdown();
+                    settlement.exit_code
+                }
+                Err(pigtree_ipc::IpcError::Cancelled) => {
+                    eprintln!(
+                        "{}",
+                        format_diagnostic(
+                            "WARN",
+                            "pigtree_cli",
+                            "Scan operation cancelled by user"
+                        )
+                    );
+                    if is_ndjson {
+                        let term_seq = last_progress_seq + 1;
+                        println!(
+                            "{}",
+                            format_scan_cancelled_ndjson_event(
+                                "scan",
+                                term_seq,
+                                None,
+                                "Scan operation cancelled by user"
+                            )
+                        );
+                    } else {
+                        println!(
+                            "{}",
+                            format_cancelled_envelope("scan", "Operation cancelled by user")
+                        );
+                    }
+                    let _ = session.shutdown();
+                    EXIT_CANCELLED
+                }
+                Err(pigtree_ipc::IpcError::CommandError { code, message }) => {
+                    eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &message));
+                    println!("{}", format_error_envelope("scan", &code, &message));
+                    let _ = session.shutdown();
+                    EXIT_COMMAND_ERROR
+                }
+                Err(err) => {
+                    let msg = format!("scan failed: {err}");
+                    eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &msg));
+                    println!(
+                        "{}",
+                        format_error_envelope("scan", "OPERATION_FAILED", &msg)
+                    );
+                    let _ = session.shutdown();
+                    EXIT_OPERATION_FAILED
+                }
+            }
+        }
         unknown => {
             let msg = format!("Unknown subcommand: {unknown}");
             eprintln!("{}", format_diagnostic("ERROR", "pigtree_cli", &msg));
             println!("{}", format_error_envelope("cli", "COMMAND_ERROR", &msg));
-            2
+            EXIT_COMMAND_ERROR
         }
     }
 }

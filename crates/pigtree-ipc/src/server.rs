@@ -3,7 +3,7 @@
 use crate::error::IpcError;
 use crate::pipe::NamedPipeServer;
 use crate::security::{constant_time_eq, derive_channel_key, generate_nonce};
-use crate::transport::FramedSession;
+use crate::transport::{FrameReadiness, FramedSession};
 use crate::win32::*;
 use pigtree_protocol::frame::{ChannelTag, FrameFlags};
 use pigtree_protocol::protobuf::{
@@ -47,6 +47,9 @@ impl EngineServerSession {
                 ..Default::default()
             };
             let _ = framed.send_message(ChannelTag::Command, FrameFlags::empty(), &resp);
+            unsafe {
+                FlushFileBuffers(framed.stream_mut().raw_handle());
+            }
             return Err(IpcError::AuthenticationFailed(
                 "Bootstrap nonce mismatch".to_string(),
             ));
@@ -59,6 +62,9 @@ impl EngineServerSession {
                 ..Default::default()
             };
             let _ = framed.send_message(ChannelTag::Command, FrameFlags::empty(), &resp);
+            unsafe {
+                FlushFileBuffers(framed.stream_mut().raw_handle());
+            }
             return Err(IpcError::IdentityMismatch {
                 expected: client_pid.to_string(),
                 actual: handshake_req.client_pid.to_string(),
@@ -105,6 +111,10 @@ impl EngineServerSession {
         self.framed.has_incoming_data()
     }
 
+    pub fn peek_frame_readiness(&self) -> Result<FrameReadiness, IpcError> {
+        self.framed.peek_frame_readiness()
+    }
+
     pub fn recv_command(&mut self) -> Result<Option<(ChannelTag, CommandRequest)>, IpcError> {
         match self.framed.recv_message::<CommandRequest>()? {
             Some((header, cmd)) => Ok(Some((header.channel_tag, cmd))),
@@ -115,6 +125,12 @@ impl EngineServerSession {
     pub fn send_response(&mut self, resp: &CommandResponse) -> Result<(), IpcError> {
         self.framed
             .send_message(ChannelTag::Command, FrameFlags::empty(), resp)?;
+        Ok(())
+    }
+
+    pub fn send_progress(&mut self, resp: &CommandResponse) -> Result<(), IpcError> {
+        self.framed
+            .send_message(ChannelTag::ProgressPulse, FrameFlags::empty(), resp)?;
         Ok(())
     }
 }
