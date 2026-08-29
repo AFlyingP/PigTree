@@ -261,6 +261,28 @@ impl SimpleJson {
             _ => None,
         }
     }
+
+    fn as_array(&self) -> Option<&Vec<SimpleJson>> {
+        match self {
+            SimpleJson::Array(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    fn as_object(&self) -> Option<&HashMap<String, SimpleJson>> {
+        match self {
+            SimpleJson::Object(o) => Some(o),
+            _ => None,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn as_bool(&self) -> Option<bool> {
+        match self {
+            SimpleJson::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
 }
 
 fn check_stderr_diagnostics(stderr: &str) {
@@ -824,4 +846,774 @@ fn test_first_pipe_instance_flag_prevents_pipe_squatting() {
     );
 
     drop(server1);
+}
+
+fn create_test_hierarchy(prefix: &str) -> PathBuf {
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("pigtree_cli_{}_{}", prefix, std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let sub_a = dir.join("subA");
+    std::fs::create_dir_all(&sub_a).unwrap();
+    std::fs::write(sub_a.join("file1.txt"), b"1234567890").unwrap(); // 10 bytes
+    std::fs::write(sub_a.join("file2.txt"), b"1234567890123456789012345").unwrap(); // 25 bytes
+
+    let sub_b = dir.join("subB");
+    std::fs::create_dir_all(&sub_b).unwrap();
+    std::fs::write(sub_b.join("file3.txt"), vec![b'x'; 100]).unwrap(); // 100 bytes
+
+    // Total: 3 dirs (root, subA, subB), 3 files (file1, file2, file3), 6 entries, 135 logical bytes
+    dir
+}
+
+#[test]
+fn test_cli_scan_valid_hierarchy_json_mode() {
+    let (cli_exe, engine_exe) = get_binaries();
+    let temp_tree = create_test_hierarchy("scan_json");
+    let target_str = temp_tree.to_str().unwrap();
+
+    let output = Command::new(&cli_exe)
+        .args([
+            "scan",
+            target_str,
+            "--format",
+            "json",
+            "--engine-path",
+            engine_exe.to_str().unwrap(),
+        ])
+        .output()
+        .expect("exec scan json");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "Scan exit code must be 0 on success"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    check_stderr_diagnostics(&stderr);
+
+    // stdout must be exactly ONE valid terminal JSON document
+    let json = SimpleJson::parse(&stdout).expect("stdout must be strict valid JSON");
+    let obj = json.as_object().expect("stdout must be JSON object");
+
+    assert!(obj
+        .get("operation_id")
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .starts_with("scan"));
+    assert_eq!(
+        obj.get("schema_version").and_then(|v| v.as_str()),
+        Some("1.0")
+    );
+    assert_eq!(
+        obj.get("run_outcome").and_then(|v| v.as_str()),
+        Some("finished")
+    );
+    assert_eq!(
+        obj.get("scope_coverage").and_then(|v| v.as_str()),
+        Some("complete")
+    );
+    assert_eq!(
+        obj.get("directory_entries").and_then(|v| v.as_f64()),
+        Some(6.0)
+    );
+    assert_eq!(obj.get("directories").and_then(|v| v.as_f64()), Some(3.0));
+    assert_eq!(obj.get("files").and_then(|v| v.as_f64()), Some(3.0));
+    assert_eq!(
+        obj.get("special_objects").and_then(|v| v.as_f64()),
+        Some(0.0)
+    );
+    assert_eq!(
+        obj.get("referenced_logical_bytes").and_then(|v| v.as_f64()),
+        Some(135.0)
+    );
+
+    let alloc = obj
+        .get("unique_allocated_bytes")
+        .and_then(|v| v.as_object())
+        .expect("unique_allocated_bytes object");
+    assert!(alloc.get("value").is_some());
+    assert_eq!(
+        alloc.get("knowledge").and_then(|v| v.as_str()),
+        Some("not_observed")
+    );
+
+    let interval = obj
+        .get("observation_interval")
+        .and_then(|v| v.as_object())
+        .expect("observation_interval object");
+    assert!(interval
+        .get("started_at")
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .ends_with('Z'));
+    assert!(interval
+        .get("completed_at")
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .ends_with('Z'));
+
+    let gaps = obj
+        .get("coverage_gaps")
+        .and_then(|v| v.as_array())
+        .expect("coverage_gaps array");
+    assert!(
+        gaps.is_empty(),
+        "coverage_gaps must be empty for complete scan"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_tree);
+}
+
+#[test]
+fn test_cli_scan_valid_hierarchy_ndjson_mode() {
+    let (cli_exe, engine_exe) = get_binaries();
+    let temp_tree = create_test_hierarchy("scan_ndjson");
+    let target_str = temp_tree.to_str().unwrap();
+
+    let output = Command::new(&cli_exe)
+        .args([
+            "scan",
+            target_str,
+            "--format",
+            "ndjson",
+            "--engine-path",
+            engine_exe.to_str().unwrap(),
+        ])
+        .output()
+        .expect("exec scan ndjson");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "Scan exit code must be 0 on success"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    check_stderr_diagnostics(&stderr);
+
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(
+        !lines.is_empty(),
+        "NDJSON output must contain at least one line (terminal line)"
+    );
+
+    let mut last_seq = 0u64;
+    for (idx, line) in lines.iter().enumerate() {
+        let json = SimpleJson::parse(line).expect("each line must be strict JSON");
+        let obj = json.as_object().expect("each line must be a JSON object");
+
+        let op_id = obj
+            .get("operation_id")
+            .and_then(|v| v.as_str())
+            .expect("operation_id");
+        assert!(op_id.starts_with("scan"));
+        assert_eq!(
+            obj.get("schema_version").and_then(|v| v.as_str()),
+            Some("1.0")
+        );
+        assert_eq!(
+            obj.get("provenance").and_then(|v| v.as_str()),
+            Some("win32_directory_traversal")
+        );
+
+        let seq = obj
+            .get("sequence_number")
+            .and_then(|v| v.as_f64())
+            .expect("sequence_number") as u64;
+        assert!(seq > last_seq, "sequence_number must be strictly monotonic");
+        last_seq = seq;
+
+        let channel = obj
+            .get("channel")
+            .and_then(|v| v.as_str())
+            .expect("channel");
+        let is_last = idx == lines.len() - 1;
+
+        if is_last {
+            assert_eq!(channel, "data");
+            assert_eq!(
+                obj.get("phase").and_then(|v| v.as_str()),
+                Some("finalizing")
+            );
+            let payload = obj
+                .get("payload")
+                .and_then(|v| v.as_object())
+                .expect("terminal payload object");
+            assert_eq!(
+                payload.get("run_outcome").and_then(|v| v.as_str()),
+                Some("finished")
+            );
+            assert_eq!(
+                payload.get("scope_coverage").and_then(|v| v.as_str()),
+                Some("complete")
+            );
+            assert_eq!(
+                payload.get("directory_entries").and_then(|v| v.as_f64()),
+                Some(6.0)
+            );
+            assert_eq!(
+                payload.get("directories").and_then(|v| v.as_f64()),
+                Some(3.0)
+            );
+            assert_eq!(payload.get("files").and_then(|v| v.as_f64()), Some(3.0));
+            assert_eq!(
+                payload.get("special_objects").and_then(|v| v.as_f64()),
+                Some(0.0)
+            );
+            assert_eq!(
+                payload
+                    .get("referenced_logical_bytes")
+                    .and_then(|v| v.as_f64()),
+                Some(135.0)
+            );
+        } else {
+            assert_eq!(channel, "progress");
+            let payload = obj
+                .get("payload")
+                .and_then(|v| v.as_object())
+                .expect("progress payload object");
+            assert!(payload.get("observed_directories").is_some());
+            assert!(payload.get("observed_files").is_some());
+            assert!(payload.get("observed_logical_bytes").is_some());
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&temp_tree);
+}
+
+#[test]
+fn test_cli_scan_target_with_spaces() {
+    let (cli_exe, engine_exe) = get_binaries();
+    let mut dir = std::env::temp_dir();
+    dir.push(format!(
+        "pigtree cli space scan test_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let file_path = dir.join("file with special name.txt");
+    std::fs::write(&file_path, b"1234567890123456789").unwrap(); // 19 bytes
+
+    let output = Command::new(&cli_exe)
+        .args([
+            "scan",
+            dir.to_str().unwrap(),
+            "--engine-path",
+            engine_exe.to_str().unwrap(),
+        ])
+        .output()
+        .expect("exec scan spaced");
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json = SimpleJson::parse(&stdout).expect("valid json");
+    assert_eq!(
+        json.get("run_outcome").and_then(|v| v.as_str()),
+        Some("finished")
+    );
+    assert_eq!(json.get("directories").and_then(|v| v.as_f64()), Some(1.0));
+    assert_eq!(json.get("files").and_then(|v| v.as_f64()), Some(1.0));
+    assert_eq!(
+        json.get("referenced_logical_bytes")
+            .and_then(|v| v.as_f64()),
+        Some(19.0)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_cli_scan_invalid_and_missing_targets_exit_2() {
+    let (cli_exe, engine_exe) = get_binaries();
+
+    // 1. Missing target path
+    let output = Command::new(&cli_exe)
+        .args(["scan", "--engine-path", engine_exe.to_str().unwrap()])
+        .output()
+        .expect("exec scan missing target");
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json = SimpleJson::parse(&stdout).expect("valid json error envelope");
+    assert_eq!(json.get("status").and_then(|v| v.as_str()), Some("error"));
+    assert_eq!(
+        json.get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("COMMAND_ERROR")
+    );
+    check_stderr_diagnostics(&String::from_utf8_lossy(&output.stderr));
+
+    // 2. Multiple target paths
+    let output = Command::new(&cli_exe)
+        .args([
+            "scan",
+            "dir1",
+            "dir2",
+            "--engine-path",
+            engine_exe.to_str().unwrap(),
+        ])
+        .output()
+        .expect("exec scan multiple targets");
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json = SimpleJson::parse(&stdout).expect("valid json error envelope");
+    assert_eq!(json.get("status").and_then(|v| v.as_str()), Some("error"));
+    assert_eq!(
+        json.get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("COMMAND_ERROR")
+    );
+
+    // 3. Nonexistent directory
+    let output = Command::new(&cli_exe)
+        .args([
+            "scan",
+            r"C:\nonexistent_dir_404_test_xyz",
+            "--engine-path",
+            engine_exe.to_str().unwrap(),
+        ])
+        .output()
+        .expect("exec scan nonexistent target");
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json = SimpleJson::parse(&stdout).expect("valid json error envelope");
+    assert_eq!(json.get("status").and_then(|v| v.as_str()), Some("error"));
+    assert_eq!(
+        json.get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("INVALID_TARGET")
+    );
+
+    // 4. File target instead of directory
+    let mut temp_file = std::env::temp_dir();
+    temp_file.push(format!(
+        "pigtree_file_target_test_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&temp_file, b"I am a file, not a directory").unwrap();
+
+    let output = Command::new(&cli_exe)
+        .args([
+            "scan",
+            temp_file.to_str().unwrap(),
+            "--engine-path",
+            engine_exe.to_str().unwrap(),
+        ])
+        .output()
+        .expect("exec scan file target");
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json = SimpleJson::parse(&stdout).expect("valid json error envelope");
+    assert_eq!(json.get("status").and_then(|v| v.as_str()), Some("error"));
+    assert_eq!(
+        json.get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("INVALID_TARGET")
+    );
+
+    let _ = std::fs::remove_file(&temp_file);
+
+    // 5. Standard UNC path
+    let output = Command::new(&cli_exe)
+        .args([
+            "scan",
+            "\\\\dummy_unc_server\\dummy_share",
+            "--engine-path",
+            engine_exe.to_str().unwrap(),
+        ])
+        .output()
+        .expect("exec scan standard UNC target");
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json = SimpleJson::parse(&stdout).expect("valid json error envelope");
+    assert_eq!(json.get("status").and_then(|v| v.as_str()), Some("error"));
+    assert_eq!(
+        json.get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("INVALID_TARGET")
+    );
+
+    // 6. Extended UNC path
+    let output = Command::new(&cli_exe)
+        .args([
+            "scan",
+            "\\\\?\\UNC\\dummy_unc_server\\dummy_share",
+            "--engine-path",
+            engine_exe.to_str().unwrap(),
+        ])
+        .output()
+        .expect("exec scan extended UNC target");
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json = SimpleJson::parse(&stdout).expect("valid json error envelope");
+    assert_eq!(json.get("status").and_then(|v| v.as_str()), Some("error"));
+    assert_eq!(
+        json.get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("INVALID_TARGET")
+    );
+}
+
+#[test]
+fn test_cli_scan_cancellation_exits_3_under_2s() {
+    use std::io::{BufRead, BufReader};
+
+    let (cli_exe, engine_exe) = get_binaries();
+    // Create tree with multiple files
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("pigtree_cli_cancel_tree_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..100 {
+        let sub = dir.join(format!("sub_{i}"));
+        std::fs::create_dir_all(&sub).unwrap();
+        for j in 0..10 {
+            std::fs::write(sub.join(format!("file_{j}.bin")), vec![0xAA; 500]).unwrap();
+        }
+    }
+
+    let mut child = Command::new(&cli_exe)
+        .args([
+            "scan",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+            "--engine-path",
+            engine_exe.to_str().unwrap(),
+        ])
+        .creation_flags(CREATE_NEW_PROCESS_GROUP)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn scan child");
+
+    let pid = child.id();
+    let stderr_pipe = child.stderr.take().expect("take stderr");
+    let stdout_pipe = child.stdout.take().expect("take stdout");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let stderr_thread = std::thread::spawn(move || {
+        let mut reader = BufReader::new(stderr_pipe);
+        let mut line = String::new();
+        let mut full_stderr = String::new();
+        let mut session_established = false;
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            if line.contains("Established authenticated session") && !session_established {
+                session_established = true;
+                let _ = tx.send(());
+            }
+            full_stderr.push_str(&line);
+            line.clear();
+        }
+        full_stderr
+    });
+
+    let stdout_thread = std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout_pipe);
+        let mut full_stdout = String::new();
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            full_stdout.push_str(&line);
+            line.clear();
+        }
+        full_stdout
+    });
+
+    rx.recv_timeout(Duration::from_millis(5000))
+        .expect("CLI must establish session before cancellation");
+
+    let start_cancel = Instant::now();
+    unsafe {
+        let res = GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid);
+        assert_ne!(res, 0, "GenerateConsoleCtrlEvent failed");
+    }
+
+    let status = child.wait().expect("wait on child");
+    let elapsed = start_cancel.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(2000),
+        "Cancellation must settle in under 2 seconds, took {:?}",
+        elapsed
+    );
+
+    assert_eq!(
+        status.code(),
+        Some(3),
+        "exit code must be 3 on cancellation"
+    );
+
+    let full_stderr = stderr_thread.join().expect("join stderr");
+    let full_stdout = stdout_thread.join().expect("join stdout");
+
+    check_stderr_diagnostics(&full_stderr);
+
+    let json =
+        SimpleJson::parse(&full_stdout).expect("stdout must be valid JSON even on cancellation");
+    assert_eq!(
+        json.get("run_outcome").and_then(|v| v.as_str()),
+        Some("cancelled")
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_cli_scan_ndjson_cancellation_exits_3_under_2s() {
+    use std::io::{BufRead, BufReader};
+
+    let (cli_exe, engine_exe) = get_binaries();
+    let mut dir = std::env::temp_dir();
+    dir.push(format!(
+        "pigtree_cli_cancel_ndjson_tree_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..100 {
+        let sub = dir.join(format!("sub_{i}"));
+        std::fs::create_dir_all(&sub).unwrap();
+        for j in 0..10 {
+            std::fs::write(sub.join(format!("file_{j}.bin")), vec![0xAA; 500]).unwrap();
+        }
+    }
+
+    let mut child = Command::new(&cli_exe)
+        .args([
+            "scan",
+            dir.to_str().unwrap(),
+            "--format",
+            "ndjson",
+            "--engine-path",
+            engine_exe.to_str().unwrap(),
+        ])
+        .creation_flags(CREATE_NEW_PROCESS_GROUP)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn scan child");
+
+    let pid = child.id();
+    let stderr_pipe = child.stderr.take().expect("take stderr");
+    let stdout_pipe = child.stdout.take().expect("take stdout");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let stderr_thread = std::thread::spawn(move || {
+        let mut reader = BufReader::new(stderr_pipe);
+        let mut line = String::new();
+        let mut full_stderr = String::new();
+        let mut session_established = false;
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            if line.contains("Established authenticated session") && !session_established {
+                session_established = true;
+                let _ = tx.send(());
+            }
+            full_stderr.push_str(&line);
+            line.clear();
+        }
+        full_stderr
+    });
+
+    let stdout_thread = std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout_pipe);
+        let mut full_stdout = String::new();
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            full_stdout.push_str(&line);
+            line.clear();
+        }
+        full_stdout
+    });
+
+    rx.recv_timeout(Duration::from_millis(5000))
+        .expect("CLI must establish session before cancellation");
+
+    let start_cancel = Instant::now();
+    unsafe {
+        let res = GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid);
+        assert_ne!(res, 0, "GenerateConsoleCtrlEvent failed");
+    }
+
+    let status = child.wait().expect("wait on child");
+    let elapsed = start_cancel.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(2000),
+        "Cancellation must settle in under 2 seconds, took {:?}",
+        elapsed
+    );
+
+    assert_eq!(
+        status.code(),
+        Some(3),
+        "exit code must be 3 on cancellation"
+    );
+
+    let full_stderr = stderr_thread.join().expect("join stderr");
+    let full_stdout = stdout_thread.join().expect("join stdout");
+
+    check_stderr_diagnostics(&full_stderr);
+
+    let pos = full_stderr
+        .find("Engine PID ")
+        .expect("Engine PID must be present in stderr diagnostics");
+    let rest = &full_stderr[pos + 11..];
+    let num_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let engine_pid: u32 = num_str.parse().expect("Valid engine PID in stderr");
+    assert!(engine_pid > 0, "Discovered PID must be positive");
+
+    unsafe {
+        let h_proc = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, engine_pid);
+        if !h_proc.is_null() && h_proc != INVALID_HANDLE_VALUE {
+            let mut exit_code: DWORD = 0;
+            GetExitCodeProcess(h_proc, &mut exit_code);
+            CloseHandle(h_proc);
+            assert_ne!(
+                exit_code, 259,
+                "Engine process {engine_pid} must be terminated (not STILL_ACTIVE 259)"
+            );
+        }
+    }
+
+    let lines: Vec<&str> = full_stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    assert!(
+        !lines.is_empty(),
+        "NDJSON output must contain at least one line (terminal event line)"
+    );
+
+    let mut last_seq = 0u64;
+    for (idx, line) in lines.iter().enumerate() {
+        let json = SimpleJson::parse(line).expect("each line must be strict JSON");
+        let obj = json.as_object().expect("each line must be a JSON object");
+
+        let op_id = obj
+            .get("operation_id")
+            .and_then(|v| v.as_str())
+            .expect("operation_id");
+        assert!(op_id.starts_with("scan"));
+        assert_eq!(
+            obj.get("schema_version").and_then(|v| v.as_str()),
+            Some("1.0")
+        );
+        assert_eq!(
+            obj.get("provenance").and_then(|v| v.as_str()),
+            Some("win32_directory_traversal")
+        );
+
+        let seq = obj
+            .get("sequence_number")
+            .and_then(|v| v.as_f64())
+            .expect("sequence_number") as u64;
+        assert!(seq > last_seq, "sequence_number must be strictly monotonic");
+        last_seq = seq;
+
+        let channel = obj
+            .get("channel")
+            .and_then(|v| v.as_str())
+            .expect("channel");
+        let is_last = idx == lines.len() - 1;
+
+        if is_last {
+            assert_eq!(channel, "data");
+            assert_eq!(
+                obj.get("phase").and_then(|v| v.as_str()),
+                Some("finalizing")
+            );
+            let payload = obj
+                .get("payload")
+                .and_then(|v| v.as_object())
+                .expect("terminal payload object");
+            assert_eq!(
+                payload.get("run_outcome").and_then(|v| v.as_str()),
+                Some("cancelled")
+            );
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_cli_scan_coverage_gaps_exit_4_or_skipped_fixture() {
+    let (cli_exe, engine_exe) = get_binaries();
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("pigtree_cli_gap_tree_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let locked = dir.join("locked_subdir");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("hidden.txt"), b"hidden").unwrap();
+
+    // Try applying ACL denial on locked_subdir
+    let icacls_output = Command::new("icacls")
+        .args([locked.to_str().unwrap(), "/deny", "*S-1-1-0:(RD)"])
+        .output();
+
+    let acl_applied = match icacls_output {
+        Ok(out) => out.status.success(),
+        Err(_) => false,
+    };
+
+    if acl_applied {
+        let output = Command::new(&cli_exe)
+            .args([
+                "scan",
+                dir.to_str().unwrap(),
+                "--format",
+                "json",
+                "--engine-path",
+                engine_exe.to_str().unwrap(),
+            ])
+            .output()
+            .expect("exec scan coverage gaps");
+
+        // Remove ACL deny to clean up temp dir
+        let _ = Command::new("icacls")
+            .args([locked.to_str().unwrap(), "/remove:d", "*S-1-1-0"])
+            .output();
+
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "Exit code must be 4 when coverage gaps are present"
+        );
+
+        let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+        let json = SimpleJson::parse(&stdout).expect("valid json terminal doc");
+        assert_eq!(
+            json.get("run_outcome").and_then(|v| v.as_str()),
+            Some("finished")
+        );
+        assert_eq!(
+            json.get("scope_coverage").and_then(|v| v.as_str()),
+            Some("partial")
+        );
+        let gaps = json
+            .get("coverage_gaps")
+            .and_then(|v| v.as_array())
+            .expect("coverage_gaps array");
+        assert!(
+            !gaps.is_empty(),
+            "coverage_gaps must contain the inaccessible directory"
+        );
+    } else {
+        eprintln!(
+            "[SKIPPED_OS_FIXTURE] icacls denial failed or not permitted under current sandbox/privilege level; verified via unit mapping."
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

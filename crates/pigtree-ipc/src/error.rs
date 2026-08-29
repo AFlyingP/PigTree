@@ -12,6 +12,7 @@ pub enum IpcError {
     Protobuf(ProtoError),
     Win32 { code: u32, message: String },
     AuthenticationFailed(String),
+    CommandError { code: String, message: String },
     IdentityMismatch { expected: String, actual: String },
     SessionNotFound,
     Timeout,
@@ -30,6 +31,9 @@ impl fmt::Display for IpcError {
                 write!(f, "Win32 error (code {code}): {message}")
             }
             IpcError::AuthenticationFailed(msg) => write!(f, "authentication failed: {msg}"),
+            IpcError::CommandError { code, message } => {
+                write!(f, "command error ({code}): {message}")
+            }
             IpcError::IdentityMismatch { expected, actual } => {
                 write!(
                     f,

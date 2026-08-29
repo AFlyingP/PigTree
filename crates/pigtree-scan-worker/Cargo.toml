@@ -1,0 +1,8 @@
+[package]
+name = "pigtree-scan-worker"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pigtree-ipc = { path = "../pigtree-ipc" }
+pigtree-protocol = { path = "../pigtree-protocol" }

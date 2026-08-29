@@ -3,6 +3,10 @@ name = "pigtree-cli"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "pigtree_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "pigtree"
 path = "src/main.rs"

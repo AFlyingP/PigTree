@@ -1,9 +1,10 @@
 use pigtree_protocol::protobuf::{
     command_request, command_response, decode_message, encode_message, AuthHandshakeRequest,
     AuthHandshakeResponse, CancelRequest, CancelResponse, CommandRequest, CommandResponse,
-    EchoRequest, EchoResponse, ErrorResponse, HealthRequest, HealthResponse, PingRequest,
-    PingResponse, ShutdownRequest, ShutdownResponse, StatusRequest, StatusResponse, VersionRequest,
-    VersionResponse,
+    CoverageGapReport, EchoRequest, EchoResponse, ErrorResponse, HealthRequest, HealthResponse,
+    PingRequest, PingResponse, ScanProgress, ScanRequest, ScanResponse, ScanRunOutcome,
+    ScopeCoverage, ShutdownRequest, ShutdownResponse, StatusRequest, StatusResponse,
+    VersionRequest, VersionResponse,
 };
 use pigtree_protocol::Message;
 
@@ -475,4 +476,181 @@ fn test_invalid_bytes_fail() {
         res_raw.is_err(),
         "prost decode directly on truncated bytes should fail"
     );
+}
+#[test]
+fn test_scan_request_roundtrip() {
+    let req = CommandRequest {
+        request_id: "req-scan-001".to_string(),
+        request: Some(command_request::Request::Scan(ScanRequest {
+            operation_id: "op-scan-123".to_string(),
+            target_path: r"C:\Data\Target".to_string(),
+        })),
+    };
+
+    let encoded = encode_message(&req);
+    let decoded: CommandRequest = decode_message(&encoded).expect("decode scan request");
+    assert_eq!(decoded.request_id, "req-scan-001");
+    match decoded.request {
+        Some(command_request::Request::Scan(inner)) => {
+            assert_eq!(inner.operation_id, "op-scan-123");
+            assert_eq!(inner.target_path, r"C:\Data\Target");
+        }
+        other => panic!("expected Scan variant, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_scan_progress_roundtrip() {
+    let resp = CommandResponse {
+        request_id: "req-scan-001".to_string(),
+        status: 0,
+        error_code: String::new(),
+        error_message: String::new(),
+        response: Some(command_response::Response::ScanProgress(ScanProgress {
+            operation_id: "op-scan-123".to_string(),
+            sequence_number: 42,
+            timestamp_iso: "2026-08-28T12:34:56.789Z".to_string(),
+            observed_directories: 150,
+            observed_files: 1200,
+            observed_logical_bytes: 524288000,
+            observed_allocated_bytes: 536870912,
+            coverage_gaps: 2,
+            current_phase: "discovering".to_string(),
+        })),
+    };
+
+    let encoded = encode_message(&resp);
+    let decoded: CommandResponse = decode_message(&encoded).expect("decode scan progress");
+    assert_eq!(decoded.request_id, "req-scan-001");
+    match decoded.response {
+        Some(command_response::Response::ScanProgress(p)) => {
+            assert_eq!(p.operation_id, "op-scan-123");
+            assert_eq!(p.sequence_number, 42);
+            assert_eq!(p.timestamp_iso, "2026-08-28T12:34:56.789Z");
+            assert_eq!(p.observed_directories, 150);
+            assert_eq!(p.observed_files, 1200);
+            assert_eq!(p.observed_logical_bytes, 524288000);
+            assert_eq!(p.observed_allocated_bytes, 536870912);
+            assert_eq!(p.coverage_gaps, 2);
+            assert_eq!(p.current_phase, "discovering");
+        }
+        other => panic!("expected ScanProgress variant, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_scan_response_roundtrip() {
+    let resp = CommandResponse {
+        request_id: "req-scan-001".to_string(),
+        status: 0,
+        error_code: String::new(),
+        error_message: String::new(),
+        response: Some(command_response::Response::ScanResponse(ScanResponse {
+            operation_id: "op-scan-123".to_string(),
+            target_path: r"C:\Data\Target".to_string(),
+            run_outcome: ScanRunOutcome::Finished as i32,
+            observation_started_iso: "2026-08-28T12:00:00.000Z".to_string(),
+            observation_completed_iso: "2026-08-28T12:05:00.000Z".to_string(),
+            scope_coverage: ScopeCoverage::Partial as i32,
+            directory_count: 200,
+            file_count: 5000,
+            special_count: 3,
+            logical_bytes: 10737418240,
+            allocated_bytes: 10737418240,
+            allocated_bytes_known: true,
+            coverage_gaps: vec![CoverageGapReport {
+                display_path: r"C:\Data\Target\Locked".to_string(),
+                status_code: "FS_ACCESS_DENIED".to_string(),
+                native_error: 5,
+                error_message: "Access is denied".to_string(),
+            }],
+            duration_ms: 300000,
+        })),
+    };
+
+    let encoded = encode_message(&resp);
+    let decoded: CommandResponse = decode_message(&encoded).expect("decode scan response");
+    assert_eq!(decoded.request_id, "req-scan-001");
+    match decoded.response {
+        Some(command_response::Response::ScanResponse(r)) => {
+            assert_eq!(r.operation_id, "op-scan-123");
+            assert_eq!(r.target_path, r"C:\Data\Target");
+            assert_eq!(r.run_outcome, ScanRunOutcome::Finished as i32);
+            assert_eq!(r.observation_started_iso, "2026-08-28T12:00:00.000Z");
+            assert_eq!(r.observation_completed_iso, "2026-08-28T12:05:00.000Z");
+            assert_eq!(r.scope_coverage, ScopeCoverage::Partial as i32);
+            assert_eq!(r.directory_count, 200);
+            assert_eq!(r.file_count, 5000);
+            assert_eq!(r.special_count, 3);
+            assert_eq!(r.logical_bytes, 10737418240);
+            assert_eq!(r.allocated_bytes, 10737418240);
+            assert!(r.allocated_bytes_known);
+            assert_eq!(r.coverage_gaps.len(), 1);
+            assert_eq!(r.coverage_gaps[0].display_path, r"C:\Data\Target\Locked");
+            assert_eq!(r.coverage_gaps[0].status_code, "FS_ACCESS_DENIED");
+            assert_eq!(r.coverage_gaps[0].native_error, 5);
+            assert_eq!(r.coverage_gaps[0].error_message, "Access is denied");
+            assert_eq!(r.duration_ms, 300000);
+        }
+        other => panic!("expected ScanResponse variant, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_scan_response_allocated_bytes_not_observed_roundtrip() {
+    let resp = CommandResponse {
+        request_id: "req-scan-002".to_string(),
+        status: 0,
+        error_code: String::new(),
+        error_message: String::new(),
+        response: Some(command_response::Response::ScanResponse(ScanResponse {
+            operation_id: "op-scan-456".to_string(),
+            target_path: r"C:DataTarget2".to_string(),
+            run_outcome: ScanRunOutcome::Finished as i32,
+            observation_started_iso: "2026-08-28T12:00:00.000Z".to_string(),
+            observation_completed_iso: "2026-08-28T12:01:00.000Z".to_string(),
+            scope_coverage: ScopeCoverage::Complete as i32,
+            directory_count: 10,
+            file_count: 50,
+            special_count: 0,
+            logical_bytes: 409600,
+            allocated_bytes: 204800,
+            allocated_bytes_known: false,
+            coverage_gaps: vec![],
+            duration_ms: 60000,
+        })),
+    };
+
+    let encoded = encode_message(&resp);
+    let decoded: CommandResponse = decode_message(&encoded).expect("decode scan response");
+    match decoded.response {
+        Some(command_response::Response::ScanResponse(r)) => {
+            assert_eq!(r.allocated_bytes, 204800);
+            assert!(!r.allocated_bytes_known);
+        }
+        other => panic!("expected ScanResponse variant, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_backward_compatibility_old_command_payloads_still_decode() {
+    // A command response encoded with Echo response (tag 7)
+    let old_resp = CommandResponse {
+        request_id: "req-legacy-1".to_string(),
+        status: 0,
+        error_code: String::new(),
+        error_message: String::new(),
+        response: Some(command_response::Response::Echo(EchoResponse {
+            payload: "legacy echo payload".to_string(),
+        })),
+    };
+    let encoded = encode_message(&old_resp);
+    let decoded: CommandResponse = decode_message(&encoded).expect("decode legacy response");
+    assert_eq!(decoded.request_id, "req-legacy-1");
+    match decoded.response {
+        Some(command_response::Response::Echo(echo)) => {
+            assert_eq!(echo.payload, "legacy echo payload");
+        }
+        other => panic!("expected Echo variant in legacy test, got {:?}", other),
+    }
 }

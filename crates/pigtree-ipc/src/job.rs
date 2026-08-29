@@ -88,4 +88,25 @@ mod tests {
         assert!(!job.raw_handle().is_null());
         assert_ne!(job.raw_handle(), INVALID_HANDLE_VALUE);
     }
+
+    #[test]
+    fn test_job_object_assign_invalid_process_handle_fails() {
+        let job = JobObject::create_kill_on_close().expect("should create job object");
+        // Note: INVALID_HANDLE_VALUE (-1) is GetCurrentProcess() pseudo-handle in Win32,
+        // which assigns the running process to the kill-on-close job object. Use a safe,
+        // non-pseudo invalid handle instead.
+        let invalid_handle: HANDLE = 1isize as HANDLE;
+        let res = unsafe { job.assign_process(invalid_handle) };
+        assert!(res.is_err());
+        match res {
+            Err(IpcError::Win32 { code, message }) => {
+                assert_eq!(code, ERROR_INVALID_HANDLE);
+                assert!(message.contains("AssignProcessToJobObject failed"));
+            }
+            other => panic!(
+                "expected IpcError::Win32 with ERROR_INVALID_HANDLE, got {:?}",
+                other
+            ),
+        }
+    }
 }

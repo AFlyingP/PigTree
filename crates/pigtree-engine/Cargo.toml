@@ -3,9 +3,17 @@ name = "pigtree-engine"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "pigtree_engine"
+path = "src/lib.rs"
+
 [[bin]]
 name = "pigtree-engine"
 path = "src/main.rs"
+
+[[bin]]
+name = "test-crash-worker"
+path = "tests/helpers/crash_worker.rs"
 
 [dependencies]
 pigtree-protocol = { path = "../pigtree-protocol" }

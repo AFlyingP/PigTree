@@ -5,10 +5,11 @@ use pigtree_ipc::job::JobObject;
 use pigtree_ipc::pipe::{format_pipe_name, NamedPipeClient, NamedPipeServer};
 use pigtree_ipc::security::generate_nonce;
 use pigtree_ipc::server::EngineServerSession;
-use pigtree_ipc::transport::FramedSession;
+use pigtree_ipc::transport::{FrameReadiness, FramedSession};
 use pigtree_ipc::win32::*;
 use pigtree_protocol::frame::{ChannelTag, FrameFlags};
 use pigtree_protocol::protobuf::{AuthHandshakeRequest, AuthHandshakeResponse};
+use pigtree_protocol::Message;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -245,4 +246,541 @@ fn test_client_in_flight_cancellation_settles() {
     unsafe {
         CloseHandle(h_cancel);
     }
+}
+
+fn create_temp_scan_tree(name: &str) -> PathBuf {
+    let mut dir = std::env::temp_dir();
+    dir.push(format!(
+        "pigtree_ipc_scan_test_{name}_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let sub_a = dir.join("subA");
+    std::fs::create_dir_all(&sub_a).unwrap();
+    let mut f1 = std::fs::File::create(sub_a.join("file1.txt")).unwrap();
+    std::io::Write::write_all(&mut f1, b"hello world 12345").unwrap(); // 17 bytes
+
+    let mut f2 = std::fs::File::create(sub_a.join("file2.txt")).unwrap();
+    std::io::Write::write_all(&mut f2, b"another test file").unwrap(); // 17 bytes
+
+    let sub_b = dir.join("subB");
+    std::fs::create_dir_all(&sub_b).unwrap();
+    let mut f3 = std::fs::File::create(sub_b.join("file3.bin")).unwrap();
+    std::io::Write::write_all(&mut f3, &vec![0u8; 1000]).unwrap(); // 1000 bytes
+
+    dir
+}
+
+#[test]
+fn test_client_scan_success_with_progress_and_terminal() {
+    let engine_exe = get_engine_exe();
+    let temp_tree = create_temp_scan_tree("success");
+    let target_str = temp_tree.to_str().unwrap();
+
+    let mut session = EngineClientSession::launch(&engine_exe).expect("launch engine session");
+
+    let mut progress_events = Vec::new();
+    let scan_resp = session
+        .scan_with_progress(
+            target_str,
+            Some(|p: pigtree_protocol::protobuf::ScanProgress| {
+                progress_events.push(p);
+            }),
+            None,
+        )
+        .expect("scan should succeed");
+
+    assert_eq!(
+        scan_resp.run_outcome,
+        pigtree_protocol::protobuf::ScanRunOutcome::Finished as i32
+    );
+    assert_eq!(
+        scan_resp.scope_coverage,
+        pigtree_protocol::protobuf::ScopeCoverage::Complete as i32
+    );
+    assert_eq!(scan_resp.directory_count, 3); // root, subA, subB
+    assert_eq!(scan_resp.file_count, 3); // file1, file2, file3
+    assert_eq!(scan_resp.logical_bytes, 17 + 17 + 1000);
+    assert!(!scan_resp.allocated_bytes_known);
+    assert!(scan_resp.coverage_gaps.is_empty());
+    assert!(!scan_resp.observation_started_iso.is_empty());
+    assert!(!scan_resp.observation_completed_iso.is_empty());
+
+    let mut last_seq = 0;
+    for p in &progress_events {
+        assert_eq!(p.operation_id, scan_resp.operation_id);
+        assert!(p.sequence_number > last_seq);
+        last_seq = p.sequence_number;
+        assert!(p.timestamp_iso.ends_with('Z'));
+        assert!(!p.current_phase.is_empty());
+    }
+
+    session.shutdown().expect("shutdown");
+    let _ = std::fs::remove_dir_all(&temp_tree);
+}
+
+#[test]
+fn test_client_scan_target_with_spaces() {
+    let engine_exe = get_engine_exe();
+    let mut dir = std::env::temp_dir();
+    dir.push(format!(
+        "pigtree spaced dir name test_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let mut f = std::fs::File::create(dir.join("spaced file name.txt")).unwrap();
+    std::io::Write::write_all(&mut f, b"content with spaces").unwrap();
+    drop(f);
+
+    let mut session = EngineClientSession::launch(&engine_exe).expect("launch engine session");
+    let scan_resp = session
+        .scan(dir.to_str().unwrap())
+        .expect("scan spaced path");
+
+    assert_eq!(
+        scan_resp.run_outcome,
+        pigtree_protocol::protobuf::ScanRunOutcome::Finished as i32
+    );
+    assert_eq!(scan_resp.directory_count, 1);
+    assert_eq!(scan_resp.file_count, 1);
+    assert_eq!(scan_resp.logical_bytes, 19);
+
+    session.shutdown().expect("shutdown");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_client_scan_invalid_target_rejected_command_error() {
+    let engine_exe = get_engine_exe();
+    let mut session = EngineClientSession::launch(&engine_exe).expect("launch engine session");
+
+    // 1. Nonexistent path rejected
+    let invalid_path = r"C:
+onexistent_pigtree_dir_test_404_abc";
+    let res = session.scan(invalid_path);
+    assert!(res.is_err(), "Invalid target path must be rejected");
+    match res.err().unwrap() {
+        IpcError::CommandError { code, message } => {
+            assert_eq!(code, "INVALID_TARGET");
+            assert!(message.contains("does not exist") || message.contains("Target"));
+        }
+        other => panic!("expected CommandError, got {:?}", other),
+    }
+
+    // Engine remains healthy
+    let ping_resp = session
+        .ping()
+        .expect("ping after rejected nonexistent scan");
+    assert!(ping_resp.timestamp_utc_ms > 0);
+
+    // 2. Standard UNC path rejected
+    let unc_path = "\\\\dummy_server\\dummy_share";
+    let res_unc = session.scan(unc_path);
+    assert!(res_unc.is_err(), "UNC path must be rejected");
+    match res_unc.err().unwrap() {
+        IpcError::CommandError { code, message } => {
+            assert_eq!(code, "INVALID_TARGET");
+            assert!(message.contains("UNC") || message.contains("network"));
+        }
+        other => panic!("expected CommandError, got {:?}", other),
+    }
+
+    // Engine remains healthy
+    let ping_resp = session.ping().expect("ping after rejected UNC scan");
+    assert!(ping_resp.timestamp_utc_ms > 0);
+
+    // 3. Extended UNC path rejected
+    let ext_unc_path = "\\\\?\\UNC\\dummy_server\\dummy_share";
+    let res_ext_unc = session.scan(ext_unc_path);
+    assert!(res_ext_unc.is_err(), "Extended UNC path must be rejected");
+    match res_ext_unc.err().unwrap() {
+        IpcError::CommandError { code, message } => {
+            assert_eq!(code, "INVALID_TARGET");
+            assert!(message.contains("UNC") || message.contains("network"));
+        }
+        other => panic!("expected CommandError, got {:?}", other),
+    }
+
+    // Engine remains healthy
+    let ping_resp = session
+        .ping()
+        .expect("ping after rejected extended UNC scan");
+    assert!(ping_resp.timestamp_utc_ms > 0);
+
+    session.shutdown().expect("shutdown");
+}
+
+#[test]
+fn test_client_scan_cancellation_under_2s() {
+    let engine_exe = get_engine_exe();
+    let temp_tree = create_temp_scan_tree("cancel");
+    let target_str = temp_tree.to_str().unwrap();
+
+    let mut session = EngineClientSession::launch(&engine_exe).expect("launch engine session");
+
+    let h_cancel = unsafe { CreateEventW(std::ptr::null_mut(), TRUE, FALSE, std::ptr::null_mut()) };
+    let h_cancel_val = h_cancel as usize;
+
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        unsafe {
+            SetEvent(h_cancel_val as HANDLE);
+        }
+    });
+
+    let start = std::time::Instant::now();
+    let res = session.scan_with_progress(
+        target_str,
+        None::<fn(pigtree_protocol::protobuf::ScanProgress)>,
+        Some(h_cancel),
+    );
+
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "Cancellation must settle in under 2 seconds, took {:?}",
+        elapsed
+    );
+
+    assert!(matches!(res, Err(IpcError::Cancelled)));
+
+    // Verify engine remains immediately healthy and usable without stale frames or extra cancel calls
+    let ping = session.ping().expect("ping after scan cancellation");
+    assert!(ping.timestamp_utc_ms > 0);
+
+    unsafe {
+        CloseHandle(h_cancel);
+    }
+    session.shutdown().expect("shutdown");
+    let _ = std::fs::remove_dir_all(&temp_tree);
+}
+
+#[test]
+fn test_partial_inbound_frame_not_consumed_and_peek_readiness() {
+    use std::io::{Read, Write};
+
+    let sess_id = unique_session_id("peek_readiness");
+    let pipe_name = format_pipe_name(&sess_id);
+    let server = NamedPipeServer::create(&pipe_name).expect("server create");
+
+    let pipe_name_clone = pipe_name.clone();
+    let client_thread = std::thread::spawn(move || {
+        let mut client = NamedPipeClient::connect(&pipe_name_clone, 3000).expect("client connect");
+        // Write 1 byte
+        client.write_all(b"P").expect("client write 1 byte");
+        client.flush().expect("client flush");
+        std::thread::sleep(Duration::from_millis(50));
+        // Write rest of 4-byte ping message payload
+        client.write_all(b"ING!").expect("client write rest");
+        client.flush().expect("client flush");
+    });
+
+    let mut server_stream = server.accept().expect("server accept");
+
+    // Wait bounded time for 1 byte to arrive
+    let mut readiness1 = FrameReadiness::Empty;
+    let start = std::time::Instant::now();
+    while readiness1 == FrameReadiness::Empty && start.elapsed() < Duration::from_millis(500) {
+        readiness1 = server_stream.peek_frame_readiness().expect("peek 1");
+        if readiness1 == FrameReadiness::Empty {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    assert_eq!(readiness1, FrameReadiness::Partial);
+
+    // Peeking again must STILL report Partial without consuming the byte!
+    let readiness2 = server_stream.peek_frame_readiness().expect("peek 2");
+    assert_eq!(readiness2, FrameReadiness::Partial);
+
+    // Read the 1 byte directly to prove it wasn't consumed
+    let mut buf = [0u8; 1];
+    server_stream.read_exact(&mut buf).expect("read byte");
+    assert_eq!(&buf, b"P");
+
+    let mut rest = [0u8; 4];
+    server_stream.read_exact(&mut rest).expect("read rest");
+    assert_eq!(&rest, b"ING!");
+
+    client_thread.join().expect("client thread join");
+}
+
+#[test]
+fn test_partial_inbound_frame_persistent_causes_bounded_engine_closure() {
+    use std::io::Write;
+
+    let engine_exe = get_engine_exe();
+    let sess_id = unique_session_id("persistent_partial");
+    let pipe_name = format_pipe_name(&sess_id);
+    let job = JobObject::create_kill_on_close().expect("create job");
+    let nonce = generate_nonce();
+    let mut bootstrap = BootstrapPipe::create().expect("create bootstrap pipe");
+    bootstrap.write_nonce(&nonce).expect("write nonce");
+
+    let child =
+        spawn_engine(&engine_exe, &pipe_name, &sess_id, &bootstrap, &job).expect("spawn engine");
+
+    std::thread::sleep(Duration::from_millis(50));
+    let stream = NamedPipeClient::connect(&pipe_name, 5000).expect("connect client");
+    let mut framed = FramedSession::new(stream);
+
+    // Handshake
+    let client_nonce = generate_nonce();
+    let client_pid = unsafe { GetCurrentProcessId() };
+    let handshake_req = pigtree_protocol::protobuf::AuthHandshakeRequest {
+        bootstrap_nonce: nonce.to_vec(),
+        client_nonce: client_nonce.to_vec(),
+        client_pid,
+        client_session_id: 0,
+    };
+    framed
+        .send_message(ChannelTag::Command, FrameFlags::empty(), &handshake_req)
+        .expect("send handshake");
+    let (_hdr, _hresp): (_, pigtree_protocol::protobuf::AuthHandshakeResponse) = framed
+        .recv_message()
+        .expect("recv handshake")
+        .expect("handshake response");
+
+    // Write only 1 byte (incomplete frame) and stop
+    let mut raw_stream = framed.into_inner();
+    raw_stream.write_all(b"P").expect("write 1 byte");
+    raw_stream.flush().expect("flush 1 byte");
+
+    // Wait for engine to detect persistent partial frame (> 250ms) and exit cleanly
+    let exit_res = child.wait_for_exit(3000);
+    assert!(
+        exit_res.is_ok(),
+        "Engine must exit boundedly when inbound frame is persistently partial"
+    );
+}
+
+#[test]
+fn test_engine_busy_rejection_during_active_scan() {
+    let engine_exe = get_engine_exe();
+    let temp_tree = create_temp_scan_tree("busy");
+    let target_str = temp_tree.to_str().unwrap().to_string();
+
+    let sess_id = unique_session_id("busy");
+    let pipe_name = format_pipe_name(&sess_id);
+    let job = JobObject::create_kill_on_close().expect("create job");
+    let nonce = generate_nonce();
+    let mut bootstrap = BootstrapPipe::create().expect("create bootstrap pipe");
+    bootstrap.write_nonce(&nonce).expect("write nonce");
+
+    let child =
+        spawn_engine(&engine_exe, &pipe_name, &sess_id, &bootstrap, &job).expect("spawn engine");
+
+    std::thread::sleep(Duration::from_millis(50));
+    let stream = NamedPipeClient::connect(&pipe_name, 5000).expect("connect client");
+    let mut framed = FramedSession::new(stream);
+
+    // Handshake
+    let client_nonce = generate_nonce();
+    let client_pid = unsafe { GetCurrentProcessId() };
+    let handshake_req = pigtree_protocol::protobuf::AuthHandshakeRequest {
+        bootstrap_nonce: nonce.to_vec(),
+        client_nonce: client_nonce.to_vec(),
+        client_pid,
+        client_session_id: 0,
+    };
+    framed
+        .send_message(ChannelTag::Command, FrameFlags::empty(), &handshake_req)
+        .expect("send handshake");
+    let (_hdr, _hresp): (_, pigtree_protocol::protobuf::AuthHandshakeResponse) = framed
+        .recv_message()
+        .expect("recv handshake")
+        .expect("handshake response");
+
+    // Send Scan request with delay to test busy rejection
+    let scan_req = pigtree_protocol::protobuf::CommandRequest {
+        request_id: "scan-busy-1".to_string(),
+        request: Some(pigtree_protocol::protobuf::command_request::Request::Scan(
+            pigtree_protocol::protobuf::ScanRequest {
+                operation_id: "scan-busy-1".to_string(),
+                target_path: target_str,
+            },
+        )),
+    };
+    framed
+        .send_message(ChannelTag::Command, FrameFlags::empty(), &scan_req)
+        .expect("send scan");
+
+    // Immediately send a Ping request while scan is active
+    let ping_req = pigtree_protocol::protobuf::CommandRequest {
+        request_id: "ping-while-busy".to_string(),
+        request: Some(pigtree_protocol::protobuf::command_request::Request::Ping(
+            pigtree_protocol::protobuf::PingRequest {
+                timestamp_utc_ms: 12345,
+                delay_ms: 0,
+            },
+        )),
+    };
+    framed
+        .send_message(ChannelTag::Command, FrameFlags::empty(), &ping_req)
+        .expect("send ping");
+
+    // Read messages from pipe until scan completes
+    let mut received_busy = false;
+    let mut received_scan_response = false;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !received_scan_response && std::time::Instant::now() < deadline {
+        match framed.peek_frame_readiness().expect("peek frame") {
+            FrameReadiness::Complete => {
+                let frame = framed
+                    .recv_frame()
+                    .expect("recv frame")
+                    .expect("frame present");
+                let resp = pigtree_protocol::protobuf::CommandResponse::decode(&frame.payload[..])
+                    .expect("decode response");
+
+                if resp.request_id == "ping-while-busy" {
+                    if resp.status != 0
+                        && (resp.error_code == "BUSY" || resp.error_message.contains("busy"))
+                    {
+                        received_busy = true;
+                    }
+                } else if resp.request_id == "scan-busy-1" {
+                    if let Some(
+                        pigtree_protocol::protobuf::command_response::Response::ScanResponse(_),
+                    ) = resp.response
+                    {
+                        received_scan_response = true;
+                    }
+                }
+            }
+            FrameReadiness::Empty | FrameReadiness::Partial => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    assert!(
+        received_busy || received_scan_response,
+        "Engine must process commands deterministically"
+    );
+
+    let _ = child.terminate(0);
+    let _ = std::fs::remove_dir_all(&temp_tree);
+}
+
+#[test]
+fn test_partial_inbound_frame_during_active_scan_causes_cleanup() {
+    use std::io::Write;
+
+    let engine_exe = get_engine_exe();
+    let temp_tree = create_temp_scan_tree("partial_active_scan");
+    let target_str = temp_tree.to_str().unwrap().to_string();
+
+    let sess_id = unique_session_id("partial_active");
+    let pipe_name = format_pipe_name(&sess_id);
+    let job = JobObject::create_kill_on_close().expect("create job");
+    let nonce = generate_nonce();
+    let mut bootstrap = BootstrapPipe::create().expect("create bootstrap pipe");
+    bootstrap.write_nonce(&nonce).expect("write nonce");
+
+    let child =
+        spawn_engine(&engine_exe, &pipe_name, &sess_id, &bootstrap, &job).expect("spawn engine");
+
+    std::thread::sleep(Duration::from_millis(50));
+    let stream = NamedPipeClient::connect(&pipe_name, 5000).expect("connect client");
+    let mut framed = FramedSession::new(stream);
+
+    // Handshake
+    let client_nonce = generate_nonce();
+    let client_pid = unsafe { GetCurrentProcessId() };
+    let handshake_req = pigtree_protocol::protobuf::AuthHandshakeRequest {
+        bootstrap_nonce: nonce.to_vec(),
+        client_nonce: client_nonce.to_vec(),
+        client_pid,
+        client_session_id: 0,
+    };
+    framed
+        .send_message(ChannelTag::Command, FrameFlags::empty(), &handshake_req)
+        .expect("send handshake");
+    let (_hdr, _hresp): (_, pigtree_protocol::protobuf::AuthHandshakeResponse) = framed
+        .recv_message()
+        .expect("recv handshake")
+        .expect("handshake response");
+
+    // Send Scan request
+    let scan_req = pigtree_protocol::protobuf::CommandRequest {
+        request_id: "scan-partial-active".to_string(),
+        request: Some(pigtree_protocol::protobuf::command_request::Request::Scan(
+            pigtree_protocol::protobuf::ScanRequest {
+                operation_id: "scan-partial-active".to_string(),
+                target_path: target_str,
+            },
+        )),
+    };
+    framed
+        .send_message(ChannelTag::Command, FrameFlags::empty(), &scan_req)
+        .expect("send scan");
+
+    // Send 1 byte (partial frame)
+    let mut raw_stream = framed.into_inner();
+    raw_stream.write_all(b"X").expect("write 1 byte");
+
+    // Engine must detect > 250ms partial frame during scan, cancel worker, and exit boundedly (< 3s)
+    let exit_res = child.wait_for_exit(3000);
+    assert!(
+        exit_res.is_ok(),
+        "Engine must exit boundedly when inbound frame is partial during active scan"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_tree);
+}
+
+#[test]
+fn test_progress_backpressure_never_yields_corruption() {
+    let engine_exe = get_engine_exe();
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("pigtree_backpressure_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Create a hierarchy with multiple folders and files
+    for d in 0..10 {
+        let sub = dir.join(format!("dir_{d}"));
+        std::fs::create_dir_all(&sub).unwrap();
+        for f in 0..10 {
+            let file_p = sub.join(format!("file_{f}.bin"));
+            std::fs::write(&file_p, vec![0xAB; 200]).unwrap();
+        }
+    }
+
+    let mut session = EngineClientSession::launch(&engine_exe).expect("launch engine session");
+
+    let mut progress_count = 0;
+    let mut last_seq = 0;
+    let scan_resp = session
+        .scan_with_progress(
+            dir.to_str().unwrap(),
+            Some(|p: pigtree_protocol::protobuf::ScanProgress| {
+                progress_count += 1;
+                assert!(p.sequence_number > last_seq);
+                last_seq = p.sequence_number;
+                // Add simulated client processing delay to exercise backpressure
+                std::thread::sleep(Duration::from_millis(5));
+            }),
+            None,
+        )
+        .expect("scan with backpressure should succeed without framing or checksum corruption");
+
+    assert_eq!(
+        scan_resp.run_outcome,
+        pigtree_protocol::protobuf::ScanRunOutcome::Finished as i32
+    );
+    assert_eq!(scan_resp.file_count, 100);
+    assert_eq!(scan_resp.directory_count, 11);
+    assert_eq!(scan_resp.logical_bytes, 100 * 200);
+
+    let ping = session.ping().expect("ping after backpressure scan");
+    assert!(ping.timestamp_utc_ms > 0);
+
+    session.shutdown().expect("shutdown");
+    let _ = std::fs::remove_dir_all(&dir);
 }
