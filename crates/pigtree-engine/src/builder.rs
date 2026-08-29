@@ -24,6 +24,7 @@ pub struct GraphBuilder {
     logical_bytes: u64,
     allocated_bytes: u64,
     allocated_bytes_known: bool,
+    current_dir_id: u32,
 }
 
 impl GraphBuilder {
@@ -39,6 +40,7 @@ impl GraphBuilder {
             logical_bytes: 0,
             allocated_bytes: 0,
             allocated_bytes_known: true,
+            current_dir_id: 0,
         }
     }
 
@@ -48,9 +50,22 @@ impl GraphBuilder {
         }
 
         match record {
-            ObservationRecord::Directory(dir) => self.ingest_directory(dir),
-            ObservationRecord::File(file) => self.ingest_file(file),
-            ObservationRecord::Special(special) => self.ingest_special(special),
+            ObservationRecord::Directory(dir) => {
+                self.current_dir_id = if dir.parent_id == 0 {
+                    dir.entry_id
+                } else {
+                    dir.parent_id
+                };
+                self.ingest_directory(dir)
+            }
+            ObservationRecord::File(file) => {
+                self.current_dir_id = file.parent_id;
+                self.ingest_file(file)
+            }
+            ObservationRecord::Special(special) => {
+                self.current_dir_id = special.parent_id;
+                self.ingest_special(special)
+            }
             ObservationRecord::CoverageGap(gap) => {
                 self.gaps.push(gap);
                 Ok(())
@@ -234,6 +249,43 @@ impl GraphBuilder {
         self.allocated_bytes_known
     }
 
+    pub fn current_directory_path(&self) -> String {
+        self.reconstruct_path(self.current_dir_id)
+    }
+
+    pub fn reconstruct_path(&self, dir_id: u32) -> String {
+        if dir_id == 0 || self.entries.is_empty() {
+            return self.root_target.clone();
+        }
+
+        let mut components = Vec::new();
+        let mut curr = dir_id;
+        let mut depth = 0;
+        while curr != 0 && depth < 10000 {
+            if let Some(entry) = self.entries.get(&curr) {
+                components.push(entry.name.as_str());
+                curr = entry.parent_id;
+                depth += 1;
+            } else {
+                break;
+            }
+        }
+
+        if components.is_empty() {
+            return self.root_target.clone();
+        }
+
+        components.reverse();
+        let mut result = components[0].to_string();
+        for comp in &components[1..] {
+            if !result.ends_with('\\') && !result.ends_with('/') {
+                result.push('\\');
+            }
+            result.push_str(comp);
+        }
+        result
+    }
+
     pub fn finish(self) -> Result<DirectoryGraph, GraphBuildError> {
         let terminal = self.terminal.ok_or(GraphBuildError::MissingTerminal)?;
 
@@ -301,6 +353,7 @@ impl GraphBuilder {
                         observed_allocated_bytes: builder.allocated_bytes,
                         coverage_gaps: builder.gaps.len() as u32,
                         current_phase: "traversing".to_string(),
+                        current_directory: builder.current_directory_path(),
                     };
                     cb(progress);
                     last_emit = now;

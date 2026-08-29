@@ -2,6 +2,13 @@
 /.cargo/
 /.cargo_home/
 /.rustup_home/
+/.rustup/
 /rustup-init.exe
 /.worktrees/
 /.dsh-tmp/
+bin/
+obj/
+artifacts/
+TestResults/
+.vs/
+*.user

@@ -185,7 +185,7 @@ pub fn format_scan_terminal_json(resp: &ScanResponse) -> String {
 /// Formats an in-flight ScanProgress update as a single-line NDJSON event envelope.
 pub fn format_scan_progress_ndjson_event(p: &ScanProgress) -> String {
     format!(
-        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"1.0","phase":{},"channel":"progress","provenance":"win32_directory_traversal","payload":{{"observed_directories":{},"observed_files":{},"observed_logical_bytes":{},"observed_allocated_bytes":{},"coverage_gaps":{}}}}}"#,
+        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"1.0","phase":{},"channel":"progress","provenance":"win32_directory_traversal","payload":{{"observed_directories":{},"observed_files":{},"observed_logical_bytes":{},"observed_allocated_bytes":{},"coverage_gaps":{},"current_directory":{}}}}}"#,
         escape_json_string(&p.operation_id),
         p.sequence_number,
         escape_json_string(&p.timestamp_iso),
@@ -194,7 +194,8 @@ pub fn format_scan_progress_ndjson_event(p: &ScanProgress) -> String {
         p.observed_files,
         p.observed_logical_bytes,
         p.observed_allocated_bytes,
-        p.coverage_gaps
+        p.coverage_gaps,
+        escape_json_string(&p.current_directory)
     )
 }
 
@@ -461,12 +462,14 @@ mod tests {
             observed_allocated_bytes: 1024,
             coverage_gaps: 0,
             current_phase: "traversing".to_string(),
+            current_directory: r#"C:	est	arget"#.to_string(),
         };
         let ndjson_prog = format_scan_progress_ndjson_event(&progress);
         assert!(ndjson_prog.contains(r#""channel":"progress""#));
         assert!(ndjson_prog.contains(r#""sequence_number":1"#));
         assert!(ndjson_prog.contains(r#""phase":"traversing""#));
         assert!(ndjson_prog.contains(r#""provenance":"win32_directory_traversal""#));
+        assert!(ndjson_prog.contains(r#""current_directory":"C:\test\target""#));
 
         let ndjson_term = format_scan_terminal_ndjson_event(&resp, 2);
         assert!(ndjson_term.contains(r#""channel":"data""#));
