@@ -139,6 +139,7 @@ impl GraphBuilder {
             kind: EntryKind::Directory,
             logical_size: None,
             allocated_size: None,
+            allocated_size_known: true,
             file_attributes: dir.file_attributes,
             reparse_tag: dir.reparse_tag,
             creation_time_utc_ms: dir.creation_time_utc_ms,
@@ -160,6 +161,7 @@ impl GraphBuilder {
             kind: EntryKind::File,
             logical_size: Some(file.logical_size),
             allocated_size: file.allocated_size,
+            allocated_size_known: file.allocated_size.is_some(),
             file_attributes: file.file_attributes,
             reparse_tag: file.reparse_tag,
             creation_time_utc_ms: file.creation_time_utc_ms,
@@ -187,6 +189,7 @@ impl GraphBuilder {
             kind: EntryKind::Special,
             logical_size: None,
             allocated_size: None,
+            allocated_size_known: false,
             file_attributes: special.file_attributes,
             reparse_tag: special.reparse_tag,
             creation_time_utc_ms: special.creation_time_utc_ms,
@@ -286,8 +289,101 @@ impl GraphBuilder {
         result
     }
 
-    pub fn finish(self) -> Result<DirectoryGraph, GraphBuildError> {
-        let terminal = self.terminal.ok_or(GraphBuildError::MissingTerminal)?;
+    fn compute_directory_aggregates(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+
+        // Collect topological traversal order using iterative DFS starting from root (id=1).
+        let mut visited = std::collections::HashSet::with_capacity(self.entries.len());
+        let mut stack = Vec::with_capacity(self.entries.len());
+        let mut order = Vec::with_capacity(self.entries.len());
+
+        if self.entries.contains_key(&1) {
+            stack.push(1);
+            visited.insert(1);
+        }
+
+        while let Some(id) = stack.pop() {
+            order.push(id);
+            if let Some(entry) = self.entries.get(&id) {
+                for &child_id in &entry.children {
+                    if visited.insert(child_id) {
+                        stack.push(child_id);
+                    }
+                }
+            }
+        }
+
+        // Handle any disconnected entries if present in partial/unusual graphs
+        if visited.len() < self.entries.len() {
+            for &id in self.entries.keys() {
+                if visited.insert(id) {
+                    stack.push(id);
+                    while let Some(curr_id) = stack.pop() {
+                        order.push(curr_id);
+                        if let Some(entry) = self.entries.get(&curr_id) {
+                            for &child_id in &entry.children {
+                                if visited.insert(child_id) {
+                                    stack.push(child_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Reverse the traversal order so all children precede their parent (bottom-up post-order).
+        order.reverse();
+
+        for id in order {
+            let entry = match self.entries.get(&id) {
+                Some(e) => e,
+                None => continue,
+            };
+
+            if entry.kind != EntryKind::Directory {
+                continue;
+            }
+
+            let mut sum_logical: u64 = 0;
+            let mut sum_alloc: u64 = 0;
+            let mut all_known = true;
+
+            for &child_id in &entry.children {
+                if let Some(child) = self.entries.get(&child_id) {
+                    sum_logical = sum_logical.saturating_add(child.logical_size.unwrap_or(0));
+                    sum_alloc = sum_alloc.saturating_add(child.allocated_size.unwrap_or(0));
+                    match child.kind {
+                        EntryKind::File => {
+                            if child.allocated_size.is_none() {
+                                all_known = false;
+                            }
+                        }
+                        EntryKind::Directory => {
+                            if !child.allocated_size_known {
+                                all_known = false;
+                            }
+                        }
+                        EntryKind::Special => {}
+                    }
+                }
+            }
+
+            if let Some(dir_entry) = self.entries.get_mut(&id) {
+                dir_entry.logical_size = Some(sum_logical);
+                dir_entry.allocated_size = Some(sum_alloc);
+                dir_entry.allocated_size_known = all_known;
+            }
+        }
+    }
+
+    pub fn finish(mut self) -> Result<DirectoryGraph, GraphBuildError> {
+        let terminal = self
+            .terminal
+            .take()
+            .ok_or(GraphBuildError::MissingTerminal)?;
 
         if self.entries.is_empty() {
             if terminal.outcome == pigtree_protocol::RunOutcome::Finished {
@@ -305,6 +401,8 @@ impl GraphBuilder {
                 allocated_bytes_known: self.allocated_bytes_known,
             });
         }
+
+        self.compute_directory_aggregates();
 
         Ok(DirectoryGraph {
             root_target: self.root_target,

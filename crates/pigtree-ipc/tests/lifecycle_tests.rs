@@ -1041,3 +1041,65 @@ fn test_get_children_on_cancelled_settled_scan() {
     session.shutdown().expect("shutdown");
     let _ = std::fs::remove_dir_all(&temp_tree);
 }
+
+#[test]
+fn test_get_children_directory_subtree_aggregates_ipc() {
+    let engine_exe = get_engine_exe();
+    let temp_tree = std::env::temp_dir().join(unique_session_id("repro_tree"));
+    let _ = std::fs::remove_dir_all(&temp_tree);
+    std::fs::create_dir_all(&temp_tree).unwrap();
+
+    let nested_folder = temp_tree.join("nested_folder");
+    std::fs::create_dir_all(&nested_folder).unwrap();
+    std::fs::write(nested_folder.join("inner_file.bin"), vec![0xAB; 5000]).unwrap();
+
+    std::fs::write(temp_tree.join("known_file.dat"), vec![0xCD; 1024]).unwrap();
+    std::fs::write(temp_tree.join("empty_file.txt"), b"").unwrap();
+
+    let mut session = EngineClientSession::launch(&engine_exe).expect("launch engine session");
+
+    let scan_resp = session
+        .scan(temp_tree.to_str().unwrap())
+        .expect("scan success");
+    let op_id = &scan_resp.operation_id;
+
+    // Root query via virtual parent 0
+    let gc_root = session
+        .get_children(op_id, 0, 0, 10)
+        .expect("get root child");
+    assert_eq!(gc_root.total_children, 1);
+    assert_eq!(gc_root.nodes[0].logical_size, 6024);
+
+    // Root's immediate children query
+    let gc_children = session
+        .get_children(op_id, 1, 0, 10)
+        .expect("get root children");
+    assert_eq!(gc_children.total_children, 3);
+
+    let nested_node = gc_children
+        .nodes
+        .iter()
+        .find(|n| n.name == "nested_folder")
+        .expect("nested_folder node must exist");
+    assert_eq!(nested_node.entry_kind, 1);
+    assert_eq!(nested_node.logical_size, 5000);
+
+    let known_node = gc_children
+        .nodes
+        .iter()
+        .find(|n| n.name == "known_file.dat")
+        .expect("known_file.dat node must exist");
+    assert_eq!(known_node.entry_kind, 2);
+    assert_eq!(known_node.logical_size, 1024);
+
+    let empty_node = gc_children
+        .nodes
+        .iter()
+        .find(|n| n.name == "empty_file.txt")
+        .expect("empty_file.txt node must exist");
+    assert_eq!(empty_node.entry_kind, 2);
+    assert_eq!(empty_node.logical_size, 0);
+
+    session.shutdown().expect("shutdown");
+    let _ = std::fs::remove_dir_all(&temp_tree);
+}

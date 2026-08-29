@@ -1527,3 +1527,803 @@ fn test_graph_builder_build_from_reader_with_progress_emits_truthful_current_dir
         assert!(p.current_directory.starts_with(r"C:\Data\Target"));
     }
 }
+
+#[test]
+fn test_directory_subtree_aggregate_repro() {
+    // Repro case:
+    // nested_folder contains inner_file.bin of 5000 B (alloc 8192);
+    // root also contains known_file.dat of 1024 B (alloc 4096) and empty_file.txt of 0 B (alloc 0).
+    // Expected:
+    // root: logical 6024 B, allocated 12288 B, allocated_known true
+    // nested_folder: logical 5000 B, allocated 8192 B, allocated_known true
+    // known_file.dat: logical 1024 B, allocated 4096 B, allocated_known true
+    // empty_file.txt: logical 0 B, allocated 0 B, allocated_known true
+    let mut buf = Vec::new();
+    let mut writer = ObservationWriter::new(&mut buf, r"C:\ReproRoot").unwrap();
+
+    // 1. Root directory (id=1, parent=0)
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 1,
+            parent_id: 0,
+            name: "Root".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 10,
+            last_write_time_utc_ms: 20,
+            last_access_time_utc_ms: 30,
+        })
+        .unwrap();
+
+    // 2. nested_folder (id=2, parent=1)
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 2,
+            parent_id: 1,
+            name: "nested_folder".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 11,
+            last_write_time_utc_ms: 21,
+            last_access_time_utc_ms: 31,
+        })
+        .unwrap();
+
+    // 3. inner_file.bin (id=3, parent=2)
+    writer
+        .write_file(&FileObservation {
+            entry_id: 3,
+            parent_id: 2,
+            name: "inner_file.bin".to_string(),
+            logical_size: 5000,
+            allocated_size: Some(8192),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 12,
+            last_write_time_utc_ms: 22,
+            last_access_time_utc_ms: 32,
+        })
+        .unwrap();
+
+    // 4. known_file.dat (id=4, parent=1)
+    writer
+        .write_file(&FileObservation {
+            entry_id: 4,
+            parent_id: 1,
+            name: "known_file.dat".to_string(),
+            logical_size: 1024,
+            allocated_size: Some(4096),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 13,
+            last_write_time_utc_ms: 23,
+            last_access_time_utc_ms: 33,
+        })
+        .unwrap();
+
+    // 5. empty_file.txt (id=5, parent=1)
+    writer
+        .write_file(&FileObservation {
+            entry_id: 5,
+            parent_id: 1,
+            name: "empty_file.txt".to_string(),
+            logical_size: 0,
+            allocated_size: Some(0),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 14,
+            last_write_time_utc_ms: 24,
+            last_access_time_utc_ms: 34,
+        })
+        .unwrap();
+
+    writer
+        .write_terminal(&TerminalObservation {
+            outcome: RunOutcome::Finished,
+            total_directories: 2,
+            total_files: 3,
+            total_logical_bytes: 6024,
+            total_allocated_bytes: 12288,
+            coverage_gap_count: 0,
+            duration_ms: 50,
+        })
+        .unwrap();
+
+    let reader = ObservationReader::new(Cursor::new(buf)).unwrap();
+    let graph = build_graph_from_reader(reader).expect("graph build should succeed");
+
+    // Graph entry direct checks
+    assert_eq!(graph.root().logical_size, Some(6024));
+    assert_eq!(graph.root().allocated_size, Some(12288));
+    assert_eq!(graph.entry(2).unwrap().logical_size, Some(5000));
+    assert_eq!(graph.entry(2).unwrap().allocated_size, Some(8192));
+    assert_eq!(graph.entry(4).unwrap().logical_size, Some(1024));
+    assert_eq!(graph.entry(4).unwrap().allocated_size, Some(4096));
+    assert_eq!(graph.entry(5).unwrap().logical_size, Some(0));
+    assert_eq!(graph.entry(5).unwrap().allocated_size, Some(0));
+
+    // GetChildren page checks for Root (parent_id = 0 -> root node)
+    let (total_root, root_nodes) = graph.get_children_page(0, 0, 10).unwrap();
+    assert_eq!(total_root, 1);
+    assert_eq!(root_nodes[0].id, 1);
+    assert_eq!(root_nodes[0].logical_size, 6024);
+    assert_eq!(root_nodes[0].allocated_size, 12288);
+    assert!(root_nodes[0].allocated_size_known);
+
+    // GetChildren page checks for Root's children (parent_id = 1)
+    let (total_children, children) = graph.get_children_page(1, 0, 100).unwrap();
+    assert_eq!(total_children, 3);
+    assert_eq!(children.len(), 3);
+
+    // Directories first: nested_folder (id=2)
+    let nested_node = &children[0];
+    assert_eq!(nested_node.id, 2);
+    assert_eq!(nested_node.name, "nested_folder");
+    assert_eq!(nested_node.entry_kind, 1);
+    assert_eq!(nested_node.logical_size, 5000);
+    assert_eq!(nested_node.allocated_size, 8192);
+    assert!(nested_node.allocated_size_known);
+    assert_eq!(nested_node.child_count, 1);
+    assert!(nested_node.has_children);
+
+    // Files sorted by logical size descending: known_file.dat (1024) then empty_file.txt (0)
+    let known_node = &children[1];
+    assert_eq!(known_node.id, 4);
+    assert_eq!(known_node.name, "known_file.dat");
+    assert_eq!(known_node.entry_kind, 2);
+    assert_eq!(known_node.logical_size, 1024);
+    assert_eq!(known_node.allocated_size, 4096);
+    assert!(known_node.allocated_size_known);
+    assert_eq!(known_node.child_count, 0);
+    assert!(!known_node.has_children);
+
+    let empty_node = &children[2];
+    assert_eq!(empty_node.id, 5);
+    assert_eq!(empty_node.name, "empty_file.txt");
+    assert_eq!(empty_node.entry_kind, 2);
+    assert_eq!(empty_node.logical_size, 0);
+    assert_eq!(empty_node.allocated_size, 0);
+    assert!(empty_node.allocated_size_known);
+    assert_eq!(empty_node.child_count, 0);
+    assert!(!empty_node.has_children);
+}
+
+#[test]
+fn test_directory_aggregates_nested_depth() {
+    let mut buf = Vec::new();
+    let mut writer = ObservationWriter::new(&mut buf, r"C:\DepthRoot").unwrap();
+
+    // Hierarchy:
+    // Root (id=1)
+    //   Level1 (id=2, parent=1)
+    //     level1_file.bin (id=3, parent=2): logical 2222, alloc 4096
+    //     Level2 (id=4, parent=2)
+    //       sibling_file.bin (id=5, parent=4): logical 1111, alloc 2048
+    //       Level3 (id=6, parent=4)
+    //         leaf_file.bin (id=7, parent=6): logical 3333, alloc 4096
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 1,
+            parent_id: 0,
+            name: "Root".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 2,
+            parent_id: 1,
+            name: "Level1".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_file(&FileObservation {
+            entry_id: 3,
+            parent_id: 2,
+            name: "level1_file.bin".to_string(),
+            logical_size: 2222,
+            allocated_size: Some(4096),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 4,
+            parent_id: 2,
+            name: "Level2".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_file(&FileObservation {
+            entry_id: 5,
+            parent_id: 4,
+            name: "sibling_file.bin".to_string(),
+            logical_size: 1111,
+            allocated_size: Some(2048),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 6,
+            parent_id: 4,
+            name: "Level3".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_file(&FileObservation {
+            entry_id: 7,
+            parent_id: 6,
+            name: "leaf_file.bin".to_string(),
+            logical_size: 3333,
+            allocated_size: Some(4096),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_terminal(&TerminalObservation {
+            outcome: RunOutcome::Finished,
+            total_directories: 4,
+            total_files: 3,
+            total_logical_bytes: 6666,
+            total_allocated_bytes: 10240,
+            coverage_gap_count: 0,
+            duration_ms: 50,
+        })
+        .unwrap();
+
+    let reader = ObservationReader::new(Cursor::new(buf)).unwrap();
+    let graph = build_graph_from_reader(reader).unwrap();
+
+    assert_eq!(graph.entry(6).unwrap().logical_size, Some(3333));
+    assert_eq!(graph.entry(6).unwrap().allocated_size, Some(4096));
+
+    assert_eq!(graph.entry(4).unwrap().logical_size, Some(4444)); // 3333 + 1111
+    assert_eq!(graph.entry(4).unwrap().allocated_size, Some(6144)); // 4096 + 2048
+
+    assert_eq!(graph.entry(2).unwrap().logical_size, Some(6666)); // 4444 + 2222
+    assert_eq!(graph.entry(2).unwrap().allocated_size, Some(10240)); // 6144 + 4096
+
+    assert_eq!(graph.root().logical_size, Some(6666));
+    assert_eq!(graph.root().allocated_size, Some(10240));
+}
+
+#[test]
+fn test_directory_sorting_by_recursive_size() {
+    let mut buf = Vec::new();
+    let mut writer = ObservationWriter::new(&mut buf, r"C:\SortDirTest").unwrap();
+
+    // Root (id=1)
+    //   SmallDir (id=2) -> small_file (100 B)
+    //   BigDir (id=4) -> big_file (10000 B)
+    //   MediumDir (id=6) -> medium_file (500 B)
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 1,
+            parent_id: 0,
+            name: "Root".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 2,
+            parent_id: 1,
+            name: "SmallDir".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_file(&FileObservation {
+            entry_id: 3,
+            parent_id: 2,
+            name: "small_file.txt".to_string(),
+            logical_size: 100,
+            allocated_size: Some(512),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 4,
+            parent_id: 1,
+            name: "BigDir".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_file(&FileObservation {
+            entry_id: 5,
+            parent_id: 4,
+            name: "big_file.txt".to_string(),
+            logical_size: 10000,
+            allocated_size: Some(16384),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 6,
+            parent_id: 1,
+            name: "MediumDir".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_file(&FileObservation {
+            entry_id: 7,
+            parent_id: 6,
+            name: "medium_file.txt".to_string(),
+            logical_size: 500,
+            allocated_size: Some(1024),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_terminal(&TerminalObservation {
+            outcome: RunOutcome::Finished,
+            total_directories: 4,
+            total_files: 3,
+            total_logical_bytes: 10600,
+            total_allocated_bytes: 17920,
+            coverage_gap_count: 0,
+            duration_ms: 20,
+        })
+        .unwrap();
+
+    let reader = ObservationReader::new(Cursor::new(buf)).unwrap();
+    let graph = build_graph_from_reader(reader).unwrap();
+
+    let (total, children) = graph.get_children_page(1, 0, 10).unwrap();
+    assert_eq!(total, 3);
+    assert_eq!(children[0].name, "BigDir");
+    assert_eq!(children[0].logical_size, 10000);
+
+    assert_eq!(children[1].name, "MediumDir");
+    assert_eq!(children[1].logical_size, 500);
+
+    assert_eq!(children[2].name, "SmallDir");
+    assert_eq!(children[2].logical_size, 100);
+}
+
+#[test]
+fn test_empty_directory_aggregates_known_zero() {
+    let mut buf = Vec::new();
+    let mut writer = ObservationWriter::new(&mut buf, r"C:\EmptyDirTest").unwrap();
+
+    // Root (id=1)
+    //   EmptyDir (id=2)
+    //   special_link (id=3, parent=1)
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 1,
+            parent_id: 0,
+            name: "Root".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 2,
+            parent_id: 1,
+            name: "EmptyDir".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_special(&SpecialObservation {
+            entry_id: 3,
+            parent_id: 1,
+            name: "special_link".to_string(),
+            file_attributes: 0x400,
+            reparse_tag: 0xA000000C,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_terminal(&TerminalObservation {
+            outcome: RunOutcome::Finished,
+            total_directories: 2,
+            total_files: 0,
+            total_logical_bytes: 0,
+            total_allocated_bytes: 0,
+            coverage_gap_count: 0,
+            duration_ms: 10,
+        })
+        .unwrap();
+
+    let reader = ObservationReader::new(Cursor::new(buf)).unwrap();
+    let graph = build_graph_from_reader(reader).unwrap();
+
+    assert_eq!(graph.root().logical_size, Some(0));
+    assert_eq!(graph.root().allocated_size, Some(0));
+    assert_eq!(graph.entry(2).unwrap().logical_size, Some(0));
+    assert_eq!(graph.entry(2).unwrap().allocated_size, Some(0));
+    assert!(graph.entry(2).unwrap().allocated_size_known);
+
+    let (total, children) = graph.get_children_page(1, 0, 10).unwrap();
+    assert_eq!(total, 2);
+    // EmptyDir node
+    let empty_dir_node = children.iter().find(|n| n.id == 2).unwrap();
+    assert_eq!(empty_dir_node.logical_size, 0);
+    assert_eq!(empty_dir_node.allocated_size, 0);
+    assert!(empty_dir_node.allocated_size_known);
+    assert_eq!(empty_dir_node.child_count, 0);
+    assert!(!empty_dir_node.has_children);
+}
+
+#[test]
+fn test_allocated_knowledge_propagation_and_known_subtotal() {
+    let mut buf = Vec::new();
+    let mut writer = ObservationWriter::new(&mut buf, r"C:\AllocKnowledgeTest").unwrap();
+
+    // Root (id=1)
+    //   DirWithMissing (id=2, parent=1)
+    //     file_with_alloc (id=3, parent=2): logical 1000, alloc Some(4096)
+    //     file_missing_alloc (id=4, parent=2): logical 2000, alloc None
+    //   DirAllKnown (id=5, parent=1)
+    //     file_known (id=6, parent=5): logical 3000, alloc Some(8192)
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 1,
+            parent_id: 0,
+            name: "Root".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 2,
+            parent_id: 1,
+            name: "DirWithMissing".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_file(&FileObservation {
+            entry_id: 3,
+            parent_id: 2,
+            name: "file_with_alloc.bin".to_string(),
+            logical_size: 1000,
+            allocated_size: Some(4096),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_file(&FileObservation {
+            entry_id: 4,
+            parent_id: 2,
+            name: "file_missing_alloc.bin".to_string(),
+            logical_size: 2000,
+            allocated_size: None,
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 5,
+            parent_id: 1,
+            name: "DirAllKnown".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_file(&FileObservation {
+            entry_id: 6,
+            parent_id: 5,
+            name: "file_known.bin".to_string(),
+            logical_size: 3000,
+            allocated_size: Some(8192),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_terminal(&TerminalObservation {
+            outcome: RunOutcome::Finished,
+            total_directories: 3,
+            total_files: 3,
+            total_logical_bytes: 6000,
+            total_allocated_bytes: 12288,
+            coverage_gap_count: 0,
+            duration_ms: 30,
+        })
+        .unwrap();
+
+    let reader = ObservationReader::new(Cursor::new(buf)).unwrap();
+    let graph = build_graph_from_reader(reader).unwrap();
+
+    // DirWithMissing: logical 3000, allocated 4096 (known subtotal), allocated_size_known false
+    let dir_missing = graph.entry(2).unwrap();
+    assert_eq!(dir_missing.logical_size, Some(3000));
+    assert_eq!(dir_missing.allocated_size, Some(4096));
+    assert!(!dir_missing.allocated_size_known);
+
+    // DirAllKnown: logical 3000, allocated 8192, allocated_size_known true
+    let dir_known = graph.entry(5).unwrap();
+    assert_eq!(dir_known.logical_size, Some(3000));
+    assert_eq!(dir_known.allocated_size, Some(8192));
+    assert!(dir_known.allocated_size_known);
+
+    // Root: logical 6000, allocated 12288, allocated_size_known false (propagated)
+    let root = graph.root();
+    assert_eq!(root.logical_size, Some(6000));
+    assert_eq!(root.allocated_size, Some(12288));
+    assert!(!root.allocated_size_known);
+
+    // GetChildren verification
+    let (_total, children) = graph.get_children_page(1, 0, 10).unwrap();
+    let node_missing = children.iter().find(|n| n.id == 2).unwrap();
+    assert_eq!(node_missing.allocated_size, 4096);
+    assert!(!node_missing.allocated_size_known);
+
+    let node_known = children.iter().find(|n| n.id == 5).unwrap();
+    assert_eq!(node_known.allocated_size, 8192);
+    assert!(node_known.allocated_size_known);
+}
+
+#[test]
+fn test_cancelled_partial_graph_aggregation() {
+    let mut buf = Vec::new();
+    let mut writer = ObservationWriter::new(&mut buf, r"C:\CancelledRoot").unwrap();
+
+    // Partial graph:
+    // Root (id=1)
+    //   PartialDir (id=2, parent=1)
+    //     partial_file (id=3, parent=2): logical 2500, alloc Some(4096)
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 1,
+            parent_id: 0,
+            name: "Root".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_directory(&DirectoryObservation {
+            entry_id: 2,
+            parent_id: 1,
+            name: "PartialDir".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    writer
+        .write_file(&FileObservation {
+            entry_id: 3,
+            parent_id: 2,
+            name: "partial_file.dat".to_string(),
+            logical_size: 2500,
+            allocated_size: Some(4096),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        })
+        .unwrap();
+
+    // Cancellation terminal
+    writer
+        .write_terminal(&TerminalObservation {
+            outcome: RunOutcome::Cancelled,
+            total_directories: 2,
+            total_files: 1,
+            total_logical_bytes: 2500,
+            total_allocated_bytes: 4096,
+            coverage_gap_count: 0,
+            duration_ms: 15,
+        })
+        .unwrap();
+
+    let reader = ObservationReader::new(Cursor::new(buf)).unwrap();
+    let graph = build_graph_from_reader(reader).expect("cancelled graph build should succeed");
+
+    assert_eq!(graph.terminal().outcome, RunOutcome::Cancelled);
+    assert_eq!(graph.entry(2).unwrap().logical_size, Some(2500));
+    assert_eq!(graph.entry(2).unwrap().allocated_size, Some(4096));
+    assert_eq!(graph.root().logical_size, Some(2500));
+    assert_eq!(graph.root().allocated_size, Some(4096));
+
+    let (_total, children) = graph.get_children_page(1, 0, 10).unwrap();
+    assert_eq!(children[0].logical_size, 2500);
+    assert_eq!(children[0].allocated_size, 4096);
+}
+
+#[test]
+fn test_deep_iterative_stack_safety() {
+    let depth = 5000;
+    let mut builder = GraphBuilder::new(r"C:\DeepRoot");
+
+    builder
+        .ingest_record(ObservationRecord::Directory(DirectoryObservation {
+            entry_id: 1,
+            parent_id: 0,
+            name: "Root".to_string(),
+            file_attributes: 0x10,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        }))
+        .unwrap();
+
+    for i in 2..=depth {
+        builder
+            .ingest_record(ObservationRecord::Directory(DirectoryObservation {
+                entry_id: i,
+                parent_id: i - 1,
+                name: format!("dir_{}", i),
+                file_attributes: 0x10,
+                reparse_tag: 0,
+                creation_time_utc_ms: 0,
+                last_write_time_utc_ms: 0,
+                last_access_time_utc_ms: 0,
+            }))
+            .unwrap();
+    }
+
+    // Leaf file at depth
+    let leaf_file_id = depth + 1;
+    builder
+        .ingest_record(ObservationRecord::File(FileObservation {
+            entry_id: leaf_file_id,
+            parent_id: depth,
+            name: "deep_leaf.bin".to_string(),
+            logical_size: 42,
+            allocated_size: Some(4096),
+            file_attributes: 0x20,
+            reparse_tag: 0,
+            creation_time_utc_ms: 0,
+            last_write_time_utc_ms: 0,
+            last_access_time_utc_ms: 0,
+        }))
+        .unwrap();
+
+    builder
+        .ingest_record(ObservationRecord::Terminal(TerminalObservation {
+            outcome: RunOutcome::Finished,
+            total_directories: depth as u64,
+            total_files: 1,
+            total_logical_bytes: 42,
+            total_allocated_bytes: 4096,
+            coverage_gap_count: 0,
+            duration_ms: 100,
+        }))
+        .unwrap();
+
+    let graph = builder.finish().expect("finish must succeed on deep tree");
+    assert_eq!(graph.root().logical_size, Some(42));
+    assert_eq!(graph.root().allocated_size, Some(4096));
+    assert_eq!(graph.entry(depth).unwrap().logical_size, Some(42));
+    assert_eq!(graph.entry(depth).unwrap().allocated_size, Some(4096));
+}
