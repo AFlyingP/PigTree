@@ -147,7 +147,7 @@
                                     SelectedItem="{Binding SelectedTreeItem, Mode=TwoWay}"
                                     VirtualizingStackPanel.IsVirtualizing="True"
                                     VirtualizingStackPanel.VirtualizationMode="Recycling"
-                                    VirtualizingStackPanel.ScrollUnit="Item"
+                                    VirtualizingStackPanel.ScrollUnit="Pixel"
                                     ScrollViewer.IsDeferredScrollingEnabled="False"
                                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                     ScrollViewer.VerticalScrollBarVisibility="Auto"

@@ -249,7 +249,8 @@ public sealed class EngineClientSession : IEngineSession
                     p.ObservedLogicalBytes,
                     p.ObservedAllocatedBytes,
                     p.CoverageGaps,
-                    p.CurrentPhase));
+                    p.CurrentPhase,
+                    p.CurrentDirectory));
             }
             else if (frame.Header.ChannelTag == ChannelTag.Command)
             {

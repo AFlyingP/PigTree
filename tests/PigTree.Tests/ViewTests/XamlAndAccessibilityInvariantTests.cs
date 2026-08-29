@@ -186,4 +186,15 @@ public class XamlAndAccessibilityInvariantTests
         var matches = fixedHeightPattern.Matches(appXaml);
         Assert.AreEqual(0, matches.Count, "App.xaml has fixed row height");
     }
+
+    [TestMethod]
+    public void MainWindow_DirectoryTreeView_UsesPixelScrollUnitAndRecyclingMode()
+    {
+        string repoRoot = FindRepoRoot();
+        string xamlPath = Path.Combine(repoRoot, "src", "PigTree", "MainWindow.xaml");
+        string xaml = File.ReadAllText(xamlPath);
+
+        Assert.IsTrue(xaml.Contains("VirtualizingStackPanel.ScrollUnit=\"Pixel\""), "DirectoryTreeView must configure VirtualizingStackPanel.ScrollUnit=\"Pixel\" per ADR 0004 section 4.1.");
+        Assert.IsTrue(xaml.Contains("VirtualizingStackPanel.VirtualizationMode=\"Recycling\""), "DirectoryTreeView must configure VirtualizingStackPanel.VirtualizationMode=\"Recycling\" per ADR 0004 section 4.1.");
+    }
 }

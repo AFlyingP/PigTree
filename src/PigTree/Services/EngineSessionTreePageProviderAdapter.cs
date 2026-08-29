@@ -25,19 +25,7 @@ public sealed class EngineSessionTreePageProviderAdapter : ITreePageProvider
         CancellationToken cancellationToken = default)
     {
         var entries = await _session.GetChildrenAsync(operationId, parentId, offset, limit, cancellationToken);
-        var nodes = entries.Select(e => new TreeNodeData(
-            Id: e.Id,
-            ParentId: e.ParentId,
-            Name: e.Name,
-            EntryKind: e.EntryKind,
-            LogicalSize: e.LogicalSize,
-            AllocatedSize: e.AllocatedSize,
-            AllocatedSizeKnown: e.AllocatedSizeKnown,
-            ChildCount: e.ChildCount,
-            HasChildren: e.HasChildren,
-            ScopeCoverage: "Complete",
-            CoverageGaps: 0
-        )).ToList();
+        var nodes = entries.Select(MapToTreeNodeData).ToList();
 
         return new PagedChildrenResult(operationId, parentId, (uint)nodes.Count, offset, nodes);
     }
@@ -51,16 +39,21 @@ public sealed class EngineSessionTreePageProviderAdapter : ITreePageProvider
             return null;
         }
 
+        return MapToTreeNodeData(root);
+    }
+
+    private static TreeNodeData MapToTreeNodeData(DirectoryEntryInfo entry)
+    {
         return new TreeNodeData(
-            Id: root.Id,
-            ParentId: root.ParentId,
-            Name: root.Name,
-            EntryKind: root.EntryKind,
-            LogicalSize: root.LogicalSize,
-            AllocatedSize: root.AllocatedSize,
-            AllocatedSizeKnown: root.AllocatedSizeKnown,
-            ChildCount: root.ChildCount,
-            HasChildren: root.HasChildren,
+            Id: entry.Id,
+            ParentId: entry.ParentId,
+            Name: entry.Name,
+            EntryKind: entry.EntryKind,
+            LogicalSize: entry.LogicalSize,
+            AllocatedSize: entry.AllocatedSize,
+            AllocatedSizeKnown: entry.AllocatedSizeKnown,
+            ChildCount: entry.ChildCount,
+            HasChildren: entry.HasChildren,
             ScopeCoverage: "Complete",
             CoverageGaps: 0
         );

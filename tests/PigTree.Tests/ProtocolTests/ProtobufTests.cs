@@ -67,7 +67,8 @@ public class ProtobufTests
             ObservedLogicalBytes = 1048576,
             ObservedAllocatedBytes = 2097152,
             CoverageGaps = 1,
-            CurrentPhase = "traversing"
+            CurrentPhase = "traversing",
+            CurrentDirectory = @"C:\ScanTarget\SubDir"
         };
 
         byte[] bytes = progress.ToByteArray();
@@ -79,6 +80,7 @@ public class ProtobufTests
         Assert.AreEqual(100u, decoded.ObservedFiles);
         Assert.AreEqual(1048576u, decoded.ObservedLogicalBytes);
         Assert.AreEqual("traversing", decoded.CurrentPhase);
+        Assert.AreEqual(@"C:\ScanTarget\SubDir", decoded.CurrentDirectory);
     }
 
     [TestMethod]
