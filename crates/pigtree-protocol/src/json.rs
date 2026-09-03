@@ -162,7 +162,7 @@ pub fn format_scan_terminal_json(resp: &ScanResponse) -> String {
     let gaps_json = format_coverage_gaps_array(&resp.coverage_gaps);
 
     format!(
-        r#"{{"operation_id":{},"schema_version":"1.0","run_outcome":{},"observation_interval":{{"started_at":{},"completed_at":{}}},"scope_coverage":{},"directory_entries":{},"directories":{},"files":{},"special_objects":{},"logical_bytes":{},"referenced_allocated_bytes":{{"value":{},"knowledge":{}}},"unique_allocated_bytes":{{"value":{},"knowledge":{}}},"known_subtotal_allocated_bytes":{},"indeterminate_external_reference_objects":{},"coverage_gaps":{}}}"#,
+        r#"{{"operation_id":{},"schema_version":"2.0","run_outcome":{},"observation_interval":{{"started_at":{},"completed_at":{}}},"scope_coverage":{},"directory_entries":{},"directories":{},"files":{},"special_objects":{},"logical_bytes":{},"referenced_allocated_bytes":{{"value":{},"knowledge":{}}},"unique_allocated_bytes":{{"value":{},"knowledge":{}}},"known_subtotal_allocated_bytes":{},"indeterminate_external_reference_objects":{},"coverage_gaps":{}}}"#,
         escape_json_string(&resp.operation_id),
         escape_json_string(outcome_str),
         escape_json_string(&resp.observation_started_iso),
@@ -195,7 +195,7 @@ fn allocation_knowledge_str(known: bool) -> &'static str {
 /// Formats an in-flight ScanProgress update as a single-line NDJSON event envelope.
 pub fn format_scan_progress_ndjson_event(p: &ScanProgress) -> String {
     format!(
-        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"1.0","phase":{},"channel":"progress","provenance":"win32_directory_traversal","payload":{{"observed_directories":{},"observed_files":{},"observed_logical_bytes":{},"observed_referenced_allocated_bytes":{},"coverage_gaps":{},"current_directory":{}}}}}"#,
+        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"2.0","phase":{},"channel":"progress","provenance":"win32_directory_traversal","payload":{{"observed_directories":{},"observed_files":{},"observed_logical_bytes":{},"observed_referenced_allocated_bytes":{},"coverage_gaps":{},"current_directory":{}}}}}"#,
         escape_json_string(&p.operation_id),
         p.sequence_number,
         escape_json_string(&p.timestamp_iso),
@@ -218,7 +218,7 @@ pub fn format_scan_terminal_ndjson_event(resp: &ScanResponse, sequence_number: u
     let gaps_json = format_coverage_gaps_array(&resp.coverage_gaps);
 
     format!(
-        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"1.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{{"run_outcome":{},"observation_interval":{{"started_at":{},"completed_at":{}}},"scope_coverage":{},"directory_entries":{},"directories":{},"files":{},"special_objects":{},"logical_bytes":{},"referenced_allocated_bytes":{{"value":{},"knowledge":{}}},"unique_allocated_bytes":{{"value":{},"knowledge":{}}},"known_subtotal_allocated_bytes":{},"indeterminate_external_reference_objects":{},"coverage_gaps":{}}}}}"#,
+        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"2.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{{"run_outcome":{},"observation_interval":{{"started_at":{},"completed_at":{}}},"scope_coverage":{},"directory_entries":{},"directories":{},"files":{},"special_objects":{},"logical_bytes":{},"referenced_allocated_bytes":{{"value":{},"knowledge":{}}},"unique_allocated_bytes":{{"value":{},"knowledge":{}}},"known_subtotal_allocated_bytes":{},"indeterminate_external_reference_objects":{},"coverage_gaps":{}}}}}"#,
         escape_json_string(&resp.operation_id),
         sequence_number,
         escape_json_string(&resp.observation_completed_iso),
@@ -299,7 +299,7 @@ pub fn format_directory_entry_json(node: &DirectoryEntryNode) -> String {
     let streams_json = format_content_streams(node);
 
     format!(
-        r#"{{"schema_version":"1.0","id":{},"parent_id":{},"name":{},"entry_kind":{},"logical_bytes":{},"referenced_allocated_bytes":{},"unique_allocated_bytes":{},"allocated_size_known":{},"known_subtotal_allocated_bytes":{},"child_count":{},"has_children":{},"observed_alias_count":{},"total_link_count":{},"external_reference_status":{}{}}}"#,
+        r#"{{"schema_version":"2.0","id":{},"parent_id":{},"name":{},"entry_kind":{},"logical_bytes":{},"referenced_allocated_bytes":{},"unique_allocated_bytes":{},"allocated_size_known":{},"known_subtotal_allocated_bytes":{},"child_count":{},"has_children":{},"observed_alias_count":{},"total_link_count":{},"external_reference_status":{}{}}}"#,
         node.id,
         node.parent_id,
         escape_json_string(&node.name),
@@ -354,7 +354,7 @@ pub fn format_directory_entry_ndjson_event(
 ) -> String {
     let entry_json = format_directory_entry_json(node);
     format!(
-        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"1.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{}}}"#,
+        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"2.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{}}}"#,
         escape_json_string(operation_id),
         sequence_number,
         escape_json_string(timestamp_iso),
@@ -405,7 +405,7 @@ pub fn format_scan_cancelled_ndjson_event(
         _ => format_utc_iso(std::time::SystemTime::now()),
     };
     format!(
-        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"1.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{{"run_outcome":"cancelled","status":"cancelled","message":{}}}}}"#,
+        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"2.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{{"run_outcome":"cancelled","status":"cancelled","message":{}}}}}"#,
         escape_json_string(operation_id),
         sequence_number,
         escape_json_string(&ts),
@@ -572,7 +572,7 @@ mod tests {
 
         let json_doc = format_scan_terminal_json(&resp);
         assert!(json_doc.contains(r#""operation_id":"scan-42""#));
-        assert!(json_doc.contains(r#""schema_version":"1.0""#));
+        assert!(json_doc.contains(r#""schema_version":"2.0""#));
         assert!(json_doc.contains(r#""run_outcome":"finished""#));
         assert!(json_doc.contains(r#""scope_coverage":"complete""#));
         assert!(json_doc.contains(r#""directory_entries":16"#));
@@ -645,7 +645,7 @@ mod tests {
         );
         assert_eq!(
             event,
-            r#"{"operation_id":"scan-1","sequence_number":3,"timestamp":"2026-08-29T10:00:00.000Z","schema_version":"1.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{"run_outcome":"cancelled","status":"cancelled","message":"Scan operation cancelled by user"}}"#
+            r#"{"operation_id":"scan-1","sequence_number":3,"timestamp":"2026-08-29T10:00:00.000Z","schema_version":"2.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{"run_outcome":"cancelled","status":"cancelled","message":"Scan operation cancelled by user"}}"#
         );
     }
 
@@ -776,7 +776,7 @@ mod tests {
         };
 
         let json_known = format_directory_entry_json(&node_known);
-        assert!(json_known.contains(r#""schema_version":"1.0""#));
+        assert!(json_known.contains(r#""schema_version":"2.0""#));
         assert!(json_known.contains(r#""id":10"#));
         assert!(json_known.contains(r#""parent_id":1"#));
         assert!(json_known.contains(r#""name":"sample_file.dat""#));
@@ -1012,11 +1012,11 @@ mod tests {
         assert!(event.contains(r#""operation_id":"op-12345""#));
         assert!(event.contains(r#""sequence_number":42"#));
         assert!(event.contains(r#""timestamp":"2026-08-29T12:00:00.000Z""#));
-        assert!(event.contains(r#""schema_version":"1.0""#));
+        assert!(event.contains(r#""schema_version":"2.0""#));
         assert!(event.contains(r#""phase":"finalizing""#));
         assert!(event.contains(r#""channel":"data""#));
         assert!(event.contains(r#""provenance":"win32_directory_traversal""#));
-        assert!(event.contains(r#""payload":{"schema_version":"1.0","id":99,"parent_id":10"#));
+        assert!(event.contains(r#""payload":{"schema_version":"2.0","id":99,"parent_id":10"#));
     }
 
     #[test]
