@@ -1574,3 +1574,135 @@ fn test_compact_types_size_of_regression() {
         "ObjectRecord size {object_record_size} bytes exceeds ceiling of 80 bytes"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Matrix 10: Single in-target alias whose object has links outside the target.
+// Issue #20 variant D — no alias badge territory, but the object must still be
+// reported ConfirmedExternal and its full allocation counted once as unique.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_single_alias_with_known_external_link_confirmed_external() {
+    let mut buf = Vec::new();
+    let mut writer = ObservationWriter::new(&mut buf, r"C:\Test").unwrap();
+
+    emit_root(&mut writer);
+
+    // One entry in the target, but the object has 2 links on the volume.
+    let external_id = ObjectIdentity::new(volume(7), 77);
+    emit_file(
+        &mut writer,
+        2,
+        1,
+        "shared.dat",
+        1000,
+        Some(1024),
+        Some(external_id),
+        ValueKnowledge::Known(2),
+    );
+
+    emit_terminal(&mut writer, 1, 1, 1000, 1024);
+
+    let graph = build_graph(buf);
+
+    let file = graph.entry(2).unwrap();
+    assert_eq!(file.observed_alias_count, 1);
+    assert_eq!(
+        file.external_reference_status,
+        ExternalReferenceStatus::ConfirmedExternal,
+        "N_tot=Known(2) > N_obs=1 means one link lives outside the target"
+    );
+    assert_eq!(file.referenced_allocated_bytes, 1024);
+    assert_eq!(file.unique_allocated_bytes, 1024);
+
+    let root = graph.root();
+    assert_eq!(root.referenced_allocated_bytes, 1024);
+    assert_eq!(root.unique_allocated_bytes, 1024);
+    assert_eq!(
+        graph.indeterminate_external_reference_objects(),
+        0,
+        "confirmed evidence must not raise the indeterminate summary count"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Matrix 11: Cloud placeholders (AC-8). Logical size is always the full
+// addressable content; physical allocation is whatever the directory query
+// observed — 0 for a dehydrated blob, unobserved when no evidence exists.
+// Nothing here may hydrate or synthesize a size.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cloud_placeholder_logical_preserved_allocation_observed_or_unknown() {
+    const IO_REPARSE_TAG_ONEDRIVE: u32 = 0x8000_0011;
+    const IO_REPARSE_TAG_FILE_PLACEHOLDER: u32 = 0x8000_0015;
+
+    let mut buf = Vec::new();
+    let mut writer = ObservationWriter::new(&mut buf, r"C:\Cloud").unwrap();
+
+    emit_root(&mut writer);
+
+    // Dehydrated OneDrive placeholder: directory query reports 0 allocated.
+    writer
+        .write_file(&FileObservation {
+            entry_id: 2,
+            parent_id: 1,
+            name: "dehydrated.dat".to_string(),
+            logical_size: 4096,
+            allocated_size: Some(0),
+            file_attributes: 0x20 | 0x400, // ARCHIVE | REPARSE_POINT
+            reparse_tag: IO_REPARSE_TAG_ONEDRIVE,
+            creation_time_utc_ms: 110,
+            last_write_time_utc_ms: 210,
+            last_access_time_utc_ms: 310,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
+        })
+        .unwrap();
+
+    // Placeholder whose allocation was not established by the query.
+    writer
+        .write_file(&FileObservation {
+            entry_id: 3,
+            parent_id: 1,
+            name: "unestablished.dat".to_string(),
+            logical_size: 2048,
+            allocated_size: None,
+            file_attributes: 0x20 | 0x400,
+            reparse_tag: IO_REPARSE_TAG_FILE_PLACEHOLDER,
+            creation_time_utc_ms: 111,
+            last_write_time_utc_ms: 211,
+            last_access_time_utc_ms: 311,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
+        })
+        .unwrap();
+
+    emit_terminal(&mut writer, 1, 2, 6144, 0);
+
+    let graph = build_graph(buf);
+
+    let dehydrated = graph.entry(2).unwrap();
+    assert_eq!(dehydrated.logical_size, Some(4096));
+    assert_eq!(dehydrated.referenced_allocated_bytes, 0);
+    assert_eq!(dehydrated.unique_allocated_bytes, 0);
+    assert!(dehydrated.allocated_size_known);
+    assert_eq!(dehydrated.reparse_tag, IO_REPARSE_TAG_ONEDRIVE);
+
+    let unestablished = graph.entry(3).unwrap();
+    assert_eq!(unestablished.logical_size, Some(2048));
+    assert!(
+        !unestablished.allocated_size_known,
+        "missing allocation evidence must stay unobserved, never forced to 0"
+    );
+    assert_eq!(unestablished.reparse_tag, IO_REPARSE_TAG_FILE_PLACEHOLDER);
+
+    // Both entries stay ordinary files: 2 entries, no stream or placeholder inflation.
+    let root = graph.root();
+    assert_eq!(root.logical_size, Some(6144));
+    assert!(!root.allocated_size_known);
+    assert_eq!(root.known_subtotal_allocated_bytes, 0);
+    assert_eq!(root.referenced_allocated_bytes, 0);
+    assert_eq!(root.unique_allocated_bytes, 0);
+    assert_eq!(graph.total_entries(), 3);
+}
