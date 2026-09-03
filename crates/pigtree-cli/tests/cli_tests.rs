@@ -927,7 +927,7 @@ fn test_cli_scan_valid_hierarchy_json_mode() {
         Some(0.0)
     );
     assert_eq!(
-        obj.get("referenced_logical_bytes").and_then(|v| v.as_f64()),
+        obj.get("logical_bytes").and_then(|v| v.as_f64()),
         Some(135.0)
     );
 
@@ -938,7 +938,7 @@ fn test_cli_scan_valid_hierarchy_json_mode() {
     assert!(alloc.get("value").is_some());
     assert_eq!(
         alloc.get("knowledge").and_then(|v| v.as_str()),
-        Some("not_observed")
+        Some("known")
     );
 
     let interval = obj
@@ -1067,7 +1067,7 @@ fn test_cli_scan_valid_hierarchy_ndjson_mode() {
             );
             assert_eq!(
                 payload
-                    .get("referenced_logical_bytes")
+                    .get("logical_bytes")
                     .and_then(|v| v.as_f64()),
                 Some(135.0)
             );
@@ -1133,7 +1133,7 @@ fn test_cli_scan_target_with_spaces() {
     assert_eq!(json.get("directories").and_then(|v| v.as_f64()), Some(1.0));
     assert_eq!(json.get("files").and_then(|v| v.as_f64()), Some(1.0));
     assert_eq!(
-        json.get("referenced_logical_bytes")
+        json.get("logical_bytes")
             .and_then(|v| v.as_f64()),
         Some(19.0)
     );

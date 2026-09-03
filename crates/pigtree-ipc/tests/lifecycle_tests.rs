@@ -303,7 +303,7 @@ fn test_client_scan_success_with_progress_and_terminal() {
     assert_eq!(scan_resp.directory_count, 3); // root, subA, subB
     assert_eq!(scan_resp.file_count, 3); // file1, file2, file3
     assert_eq!(scan_resp.logical_bytes, 17 + 17 + 1000);
-    assert!(!scan_resp.allocated_bytes_known);
+    assert!(scan_resp.allocated_bytes_known);
     assert!(scan_resp.coverage_gaps.is_empty());
     assert!(!scan_resp.observation_started_iso.is_empty());
     assert!(!scan_resp.observation_completed_iso.is_empty());
@@ -967,15 +967,49 @@ fn test_get_children_on_cancelled_settled_scan() {
     let mut session = EngineClientSession::launch(&engine_exe).expect("launch engine session");
 
     let h_cancel = unsafe { CreateEventW(std::ptr::null_mut(), TRUE, FALSE, std::ptr::null_mut()) };
+    assert!(!h_cancel.is_null() && h_cancel != INVALID_HANDLE_VALUE);
     let h_cancel_val = h_cancel as usize;
 
+    struct CancelWatchdogGuard {
+        h_cancel: HANDLE,
+        disarm_tx: Option<std::sync::mpsc::Sender<()>>,
+        watchdog_handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Drop for CancelWatchdogGuard {
+        fn drop(&mut self) {
+            if let Some(tx) = self.disarm_tx.take() {
+                let _ = tx.send(());
+            }
+            if let Some(handle) = self.watchdog_handle.take() {
+                let _ = handle.join();
+            }
+            if !self.h_cancel.is_null() && self.h_cancel != INVALID_HANDLE_VALUE {
+                unsafe {
+                    CloseHandle(self.h_cancel);
+                }
+                self.h_cancel = std::ptr::null_mut();
+            }
+        }
+    }
+
+    let (watchdog_tx, watchdog_rx) = std::sync::mpsc::channel();
     let h_cancel_thread = h_cancel_val;
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(60));
-        unsafe {
-            SetEvent(h_cancel_thread as HANDLE);
+    let watchdog_handle = std::thread::spawn(move || {
+        if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+            watchdog_rx.recv_timeout(Duration::from_secs(5))
+        {
+            unsafe {
+                SetEvent(h_cancel_thread as HANDLE);
+            }
         }
     });
+
+    let cancel_guard = CancelWatchdogGuard {
+        h_cancel,
+        disarm_tx: Some(watchdog_tx),
+        watchdog_handle: Some(watchdog_handle),
+    };
 
     let scan_outcome = session.scan_with_progress_outcome(
         temp_tree.to_str().unwrap(),
@@ -1011,11 +1045,20 @@ fn test_get_children_on_cancelled_settled_scan() {
             assert_eq!(root_id, 1);
 
             // Query root's children from the partial scan
+            let limit = 100;
+            let offset = 0;
             let gc_children = session
-                .get_children(op_id, root_id, 0, 100)
+                .get_children(op_id, root_id, offset, limit)
                 .expect("GetChildren on root children of cancelled scan should succeed");
-            assert!(gc_children.total_children > 0);
-            assert!(!gc_children.nodes.is_empty());
+            assert_eq!(gc_children.parent_id, root_id);
+            assert_eq!(gc_children.offset, offset);
+            assert!(gc_children.nodes.len() <= limit as usize);
+            assert!(gc_children.nodes.len() as u32 <= gc_children.total_children);
+            if gc_children.total_children <= limit {
+                assert_eq!(gc_children.nodes.len() as u32, gc_children.total_children);
+            } else {
+                assert_eq!(gc_children.nodes.len(), limit as usize);
+            }
 
             // Pick an observed child directory if any and query its children
             let child_dir = gc_children.nodes.iter().find(|n| n.entry_kind == 1);
@@ -1035,9 +1078,7 @@ fn test_get_children_on_cancelled_settled_scan() {
         }
     }
 
-    unsafe {
-        CloseHandle(h_cancel);
-    }
+    drop(cancel_guard);
     session.shutdown().expect("shutdown");
     let _ = std::fs::remove_dir_all(&temp_tree);
 }
@@ -1068,7 +1109,7 @@ fn test_get_children_directory_subtree_aggregates_ipc() {
         .get_children(op_id, 0, 0, 10)
         .expect("get root child");
     assert_eq!(gc_root.total_children, 1);
-    assert_eq!(gc_root.nodes[0].logical_size, 6024);
+    assert_eq!(gc_root.nodes[0].logical_bytes, 6024);
 
     // Root's immediate children query
     let gc_children = session
@@ -1082,7 +1123,7 @@ fn test_get_children_directory_subtree_aggregates_ipc() {
         .find(|n| n.name == "nested_folder")
         .expect("nested_folder node must exist");
     assert_eq!(nested_node.entry_kind, 1);
-    assert_eq!(nested_node.logical_size, 5000);
+    assert_eq!(nested_node.logical_bytes, 5000);
 
     let known_node = gc_children
         .nodes
@@ -1090,7 +1131,7 @@ fn test_get_children_directory_subtree_aggregates_ipc() {
         .find(|n| n.name == "known_file.dat")
         .expect("known_file.dat node must exist");
     assert_eq!(known_node.entry_kind, 2);
-    assert_eq!(known_node.logical_size, 1024);
+    assert_eq!(known_node.logical_bytes, 1024);
 
     let empty_node = gc_children
         .nodes
@@ -1098,7 +1139,7 @@ fn test_get_children_directory_subtree_aggregates_ipc() {
         .find(|n| n.name == "empty_file.txt")
         .expect("empty_file.txt node must exist");
     assert_eq!(empty_node.entry_kind, 2);
-    assert_eq!(empty_node.logical_size, 0);
+    assert_eq!(empty_node.logical_bytes, 0);
 
     session.shutdown().expect("shutdown");
     let _ = std::fs::remove_dir_all(&temp_tree);

@@ -26,6 +26,10 @@ fn make_sample_response(
         allocated_bytes_known,
         coverage_gaps,
         duration_ms: 1000,
+        referenced_allocated_bytes: if allocated_bytes_known { 2048 } else { 0 },
+        unique_allocated_bytes: if allocated_bytes_known { 2048 } else { 0 },
+        known_subtotal_allocated_bytes: if allocated_bytes_known { 2048 } else { 0 },
+        indeterminate_external_reference_objects: 0,
     }
 }
 
