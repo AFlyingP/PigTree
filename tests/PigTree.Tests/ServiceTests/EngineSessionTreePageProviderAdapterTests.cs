@@ -56,8 +56,8 @@ public class EngineSessionTreePageProviderAdapterTests
                         ParentId = 1,
                         Name = "ChildDir",
                         EntryKind = 1,
-                        LogicalSize = 2048,
-                        AllocatedSize = 4096,
+                        LogicalBytes = 2048,
+                        ReferencedAllocatedBytes = 4096,
                         AllocatedSizeKnown = true,
                         ChildCount = 5,
                         HasChildren = true
@@ -68,8 +68,8 @@ public class EngineSessionTreePageProviderAdapterTests
                         ParentId = 1,
                         Name = "file.txt",
                         EntryKind = 2,
-                        LogicalSize = 1024,
-                        AllocatedSize = 1024,
+                        LogicalBytes = 1024,
+                        ReferencedAllocatedBytes = 1024,
                         AllocatedSizeKnown = true,
                         ChildCount = 0,
                         HasChildren = false
@@ -93,8 +93,8 @@ public class EngineSessionTreePageProviderAdapterTests
         Assert.AreEqual(1u, node0.ParentId);
         Assert.AreEqual("ChildDir", node0.Name);
         Assert.AreEqual(1u, node0.EntryKind);
-        Assert.AreEqual(2048UL, node0.LogicalSize);
-        Assert.AreEqual(4096UL, node0.AllocatedSize);
+        Assert.AreEqual(2048UL, node0.LogicalBytes);
+        Assert.AreEqual(4096UL, node0.ReferencedAllocatedBytes);
         Assert.IsTrue(node0.AllocatedSizeKnown);
         Assert.AreEqual(5u, node0.ChildCount);
         Assert.IsTrue(node0.HasChildren);
@@ -124,11 +124,17 @@ public class EngineSessionTreePageProviderAdapterTests
                         ParentId = 0,
                         Name = @"C:\Root",
                         EntryKind = 1,
-                        LogicalSize = 10000,
-                        AllocatedSize = 12000,
+                        LogicalBytes = 10000,
+                        ReferencedAllocatedBytes = 12000,
                         AllocatedSizeKnown = true,
                         ChildCount = 10,
-                        HasChildren = true
+                        HasChildren = true,
+                        UniqueAllocatedBytes = 11000,
+                        ObservedAliasCount = 1,
+                        TotalLinkCountStatus = "known",
+                        TotalLinkCountValue = 1,
+                        ExternalReferenceStatus = "confirmed_none",
+                        KnownSubtotalAllocatedBytes = 11000
                     }
                 };
                 return Task.FromResult<IReadOnlyList<DirectoryEntryInfo>>(list);
@@ -143,11 +149,19 @@ public class EngineSessionTreePageProviderAdapterTests
         Assert.AreEqual(0u, root.ParentId);
         Assert.AreEqual(@"C:\Root", root.Name);
         Assert.AreEqual(1u, root.EntryKind);
-        Assert.AreEqual(10000UL, root.LogicalSize);
-        Assert.AreEqual(12000UL, root.AllocatedSize);
+        Assert.AreEqual(10000UL, root.LogicalBytes);
+        Assert.AreEqual(12000UL, root.ReferencedAllocatedBytes);
         Assert.IsTrue(root.AllocatedSizeKnown);
         Assert.AreEqual(10u, root.ChildCount);
         Assert.IsTrue(root.HasChildren);
+
+        // Issue #20 filesystem object accounting fields must flow through the adapter
+        Assert.AreEqual(11000UL, root.UniqueAllocatedBytes);
+        Assert.AreEqual(1u, root.ObservedAliasCount);
+        Assert.AreEqual("known", root.TotalLinkCountStatus);
+        Assert.AreEqual(1u, root.TotalLinkCountValue);
+        Assert.AreEqual("confirmed_none", root.ExternalReferenceStatus);
+        Assert.AreEqual(11000UL, root.KnownSubtotalAllocatedBytes);
     }
 
     [TestMethod]

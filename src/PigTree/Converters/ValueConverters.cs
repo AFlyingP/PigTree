@@ -82,3 +82,41 @@ public sealed class ExpandCollapseIconConverter : IValueConverter
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => false;
 }
+
+/// <summary>
+/// Converts a boolean to a <see cref="GridViewColumn"/> width: columns cannot be
+/// collapsed via Visibility, so hidden columns collapse to zero width instead.
+/// </summary>
+public sealed class BooleanToColumnWidthConverter : IValueConverter
+{
+    public double VisibleWidth { get; set; } = 130.0;
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        return value is true ? VisibleWidth : 0.0;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}
+
+/// <summary>
+/// A Freezable proxy enabling bindings from visual/logical tree orphans (such as GridViewColumn)
+/// to the ambient DataContext.
+/// </summary>
+public class BindingProxy : Freezable
+{
+    protected override Freezable CreateInstanceCore()
+    {
+        return new BindingProxy();
+    }
+
+    public object? Data
+    {
+        get => GetValue(DataProperty);
+        set => SetValue(DataProperty, value);
+    }
+
+    public static readonly DependencyProperty DataProperty =
+        DependencyProperty.Register(nameof(Data), typeof(object), typeof(BindingProxy), new UIPropertyMetadata(null));
+}

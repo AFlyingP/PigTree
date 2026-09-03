@@ -5,6 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:controls="clr-namespace:PigTree.Controls"
         xmlns:vm="clr-namespace:PigTree.ViewModel"
+        xmlns:conv="clr-namespace:PigTree.Converters"
         mc:Ignorable="d"
         Title="PigTree - Disk Space Analyzer"
         Height="650" Width="900"
@@ -14,6 +15,10 @@
         DragOver="OnWindowDragOver"
         Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
         Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}">
+
+    <Window.Resources>
+        <conv:BindingProxy x:Key="Proxy" Data="{Binding}" />
+    </Window.Resources>
 
     <Window.InputBindings>
         <KeyBinding Key="Escape" Command="{Binding CancelCommand}" />
@@ -37,6 +42,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
@@ -86,6 +92,24 @@
                             Command="{Binding CancelCommand}"
                             Visibility="{Binding IsCancelVisible, Converter={StaticResource BoolToVis}}" />
                 </StackPanel>
+
+                <!-- Compact View menu: toggles the hidden Unique Allocated column (keyboard operable) -->
+                <Menu Grid.Column="4"
+                      AutomationProperties.AutomationId="ViewMenu"
+                      AutomationProperties.Name="View Menu"
+                      VerticalAlignment="Center"
+                      Margin="8,0,0,0"
+                      Background="Transparent">
+                    <MenuItem Header="_View"
+                              AutomationProperties.AutomationId="ViewMenuItem"
+                              AutomationProperties.Name="View">
+                        <MenuItem Header="Show Unique Allocated Size"
+                                  AutomationProperties.AutomationId="ShowUniqueAllocatedMenuItem"
+                                  AutomationProperties.Name="Show Unique Allocated Size"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding ShowUniqueAllocatedColumn, Mode=TwoWay}" />
+                    </MenuItem>
+                </Menu>
             </Grid>
         </Border>
 
@@ -195,6 +219,26 @@
                                     <TextBlock Text="{Binding Name}"
                                                VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis" />
+
+                                    <!-- Hard link alias badge: multiple directory entries refer to one object -->
+                                    <TextBlock Text="{Binding AliasBadgeText}"
+                                               AutomationProperties.AutomationId="AliasBadgeTextBlock"
+                                               AutomationProperties.Name="Hard link aliases"
+                                               Visibility="{Binding HasAliasBadge, Converter={StaticResource BoolToVis}}"
+                                               Margin="6,0,0,0"
+                                               FontSize="11"
+                                               VerticalAlignment="Center"
+                                               Foreground="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+
+                                    <!-- Confirmed external link indicator (shown even with a single alias) -->
+                                    <TextBlock Text="{Binding ExternalLinkBadgeText}"
+                                               AutomationProperties.AutomationId="ExternalLinkBadgeTextBlock"
+                                               AutomationProperties.Name="Confirmed external link"
+                                               Visibility="{Binding HasExternalLinkBadge, Converter={StaticResource BoolToVis}}"
+                                               Margin="6,0,0,0"
+                                               FontSize="11"
+                                               VerticalAlignment="Center"
+                                               Foreground="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
                                 </StackPanel>
                             </DataTemplate>
                         </GridViewColumn.CellTemplate>
@@ -204,9 +248,14 @@
                     <GridViewColumn Header="Logical Size" Width="120"
                                     DisplayMemberBinding="{Binding FormattedLogicalSize}" />
 
-                    <!-- Allocated Size Column -->
-                    <GridViewColumn Header="Allocated Size" Width="120"
-                                    DisplayMemberBinding="{Binding FormattedAllocatedSize}" />
+                    <!-- Referenced Allocated Column: additive physical allocation across entry paths -->
+                    <GridViewColumn Header="Referenced Allocated" Width="130"
+                                    DisplayMemberBinding="{Binding FormattedReferencedAllocated}" />
+
+                    <!-- Unique Allocated Column: each distinct object counted once; hidden by default -->
+                    <GridViewColumn Header="Unique Allocated"
+                                    Width="{Binding Data.ShowUniqueAllocatedColumn, Source={StaticResource Proxy}, Converter={StaticResource UniqueColumnWidth}, Mode=OneWay}"
+                                    DisplayMemberBinding="{Binding FormattedUniqueAllocated}" />
 
                     <!-- Child / Item Count Column -->
                     <GridViewColumn Header="Items" Width="90"
@@ -240,6 +289,18 @@
                                VerticalAlignment="Center"
                                FontWeight="SemiBold"
                                Margin="0,0,16,0"
+                               Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" />
+
+                    <!-- Summary-level uncertainty indicator for indeterminate external references (AC-7) -->
+                    <TextBlock x:Name="ExternalReferenceSummaryTextBlock"
+                               AutomationProperties.AutomationId="ExternalReferenceSummaryTextBlock"
+                               AutomationProperties.Name="External link uncertainty summary"
+                               AutomationProperties.LiveSetting="Polite"
+                               Text="{Binding ExternalReferenceSummaryText}"
+                               Visibility="{Binding HasExternalReferenceSummary, Converter={StaticResource BoolToVis}}"
+                               VerticalAlignment="Center"
+                               Margin="0,0,16,0"
+                               TextTrimming="CharacterEllipsis"
                                Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" />
 
                     <TextBlock Text="{Binding CurrentDirectory}"

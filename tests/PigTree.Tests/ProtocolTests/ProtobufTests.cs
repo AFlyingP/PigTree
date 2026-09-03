@@ -1,6 +1,8 @@
 using System.IO;
 using Google.Protobuf;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using PigTree.Ipc;
+using PigTree.Model;
 using PigTree.Session.V1;
 
 namespace PigTree.Tests.ProtocolTests;
@@ -65,7 +67,7 @@ public class ProtobufTests
             ObservedDirectories = 10,
             ObservedFiles = 100,
             ObservedLogicalBytes = 1048576,
-            ObservedAllocatedBytes = 2097152,
+            ObservedReferencedAllocatedBytes = 2097152,
             CoverageGaps = 1,
             CurrentPhase = "traversing",
             CurrentDirectory = @"C:\ScanTarget\SubDir"
@@ -164,8 +166,8 @@ public class ProtobufTests
                         ParentId = 1,
                         Name = "SubDir",
                         EntryKind = 1,
-                        LogicalSize = 0,
-                        AllocatedSize = 0,
+                        LogicalBytes = 0,
+                        ReferencedAllocatedBytes = 0,
                         AllocatedSizeKnown = true,
                         ChildCount = 3,
                         HasChildren = true
@@ -176,11 +178,20 @@ public class ProtobufTests
                         ParentId = 1,
                         Name = "file.txt",
                         EntryKind = 2,
-                        LogicalSize = 1024,
-                        AllocatedSize = 4096,
+                        LogicalBytes = 1024,
+                        ReferencedAllocatedBytes = 4096,
                         AllocatedSizeKnown = true,
                         ChildCount = 0,
-                        HasChildren = false
+                        HasChildren = false,
+                        UniqueAllocatedBytes = 2048,
+                        ObservedAliasCount = 2,
+                        TotalLinkCount = new LinkCountKnowledgeProto
+                        {
+                            Status = LinkCountKnowledgeStatus.Known,
+                            Count = 2
+                        },
+                        ExternalReferenceStatus = ExternalReferenceStatusProto.ExternalReferenceStatusConfirmedExternal,
+                        KnownSubtotalAllocatedBytes = 3072
                     }
                 }
             }
@@ -197,5 +208,105 @@ public class ProtobufTests
         Assert.AreEqual("file.txt", decodedResp.GetChildren.Nodes[1].Name);
         Assert.AreEqual(2u, decodedResp.GetChildren.Nodes[1].EntryKind);
         Assert.IsFalse(decodedResp.GetChildren.Nodes[1].HasChildren);
+
+        // Issue #20 filesystem object accounting fields survive a roundtrip
+        var fileNode = decodedResp.GetChildren.Nodes[1];
+        Assert.AreEqual(2048UL, fileNode.UniqueAllocatedBytes);
+        Assert.AreEqual(2u, fileNode.ObservedAliasCount);
+        Assert.IsNotNull(fileNode.TotalLinkCount);
+        Assert.AreEqual(LinkCountKnowledgeStatus.Known, fileNode.TotalLinkCount.Status);
+        Assert.AreEqual(2u, fileNode.TotalLinkCount.Count);
+        Assert.AreEqual(ExternalReferenceStatusProto.ExternalReferenceStatusConfirmedExternal, fileNode.ExternalReferenceStatus);
+        Assert.AreEqual(3072UL, fileNode.KnownSubtotalAllocatedBytes);
+    }
+
+    [TestMethod]
+    public void ExternalReferenceStatus_UnspecifiedAndUnknown_NeverMapsToConfirmedNone()
+    {
+        // Unspecified must never map to confirmed_none; it should map fail-closed to indeterminate
+        string unspecifiedResult = EngineClientSession.MapExternalReferenceStatus(ExternalReferenceStatusProto.ExternalReferenceStatusUnspecified);
+        Assert.AreEqual(ExternalReference.Indeterminate, unspecifiedResult);
+
+        // Unknown enum value must also fail-closed to indeterminate
+        string unknownResult = EngineClientSession.MapExternalReferenceStatus((ExternalReferenceStatusProto)999);
+        Assert.AreEqual(ExternalReference.Indeterminate, unknownResult);
+
+        // ConfirmedNone must map to confirmed_none
+        string confirmedNoneResult = EngineClientSession.MapExternalReferenceStatus(ExternalReferenceStatusProto.ExternalReferenceStatusConfirmedNone);
+        Assert.AreEqual(ExternalReference.ConfirmedNone, confirmedNoneResult);
+    }
+
+    [TestMethod]
+    public void MapDirectoryEntries_OmittedTotalLinkCount_DoesNotThrow_AndMapsToNotObservedNull()
+    {
+        var nodeWithoutLinkCount = new DirectoryEntryNode
+        {
+            Id = 1,
+            ParentId = 0,
+            Name = "file.txt",
+            EntryKind = 2,
+            LogicalBytes = 100,
+            ReferencedAllocatedBytes = 200,
+            AllocatedSizeKnown = true,
+            ChildCount = 0,
+            HasChildren = false,
+            // TotalLinkCount is omitted (null in C# protobuf)
+        };
+        Assert.IsNull(nodeWithoutLinkCount.TotalLinkCount);
+
+        var mapped = EngineClientSession.MapDirectoryEntries(new[] { nodeWithoutLinkCount });
+        Assert.AreEqual(1, mapped.Count);
+        Assert.AreEqual(LinkCountKnowledge.NotObserved, mapped[0].TotalLinkCountStatus);
+        Assert.IsNull(mapped[0].TotalLinkCountValue, "Omitted link count must map to null, not 0.");
+    }
+
+    [TestMethod]
+    public void MapDirectoryEntries_NonKnownStatuses_MapValueToNull_NeverMasqueradeAsZero()
+    {
+        foreach (var status in new[]
+        {
+            LinkCountKnowledgeStatus.Unavailable,
+            LinkCountKnowledgeStatus.NotApplicable,
+            LinkCountKnowledgeStatus.NotObserved,
+            LinkCountKnowledgeStatus.Unspecified
+        })
+        {
+            var node = new DirectoryEntryNode
+            {
+                Id = 1,
+                ParentId = 0,
+                Name = "file.txt",
+                EntryKind = 2,
+                TotalLinkCount = new LinkCountKnowledgeProto
+                {
+                    Status = status,
+                    Count = 0
+                }
+            };
+
+            var mapped = EngineClientSession.MapDirectoryEntries(new[] { node });
+            Assert.IsNull(mapped[0].TotalLinkCountValue, $"Status {status} must map value to null, not masquerade as 0.");
+        }
+    }
+
+    [TestMethod]
+    public void MapDirectoryEntries_KnownZero_PreservesExplicitZero()
+    {
+        var node = new DirectoryEntryNode
+        {
+            Id = 1,
+            ParentId = 0,
+            Name = "corrupt.txt",
+            EntryKind = 2,
+            TotalLinkCount = new LinkCountKnowledgeProto
+            {
+                Status = LinkCountKnowledgeStatus.Known,
+                Count = 0
+            }
+        };
+
+        var mapped = EngineClientSession.MapDirectoryEntries(new[] { node });
+        Assert.AreEqual(LinkCountKnowledge.Known, mapped[0].TotalLinkCountStatus);
+        Assert.AreEqual((uint?)0, mapped[0].TotalLinkCountValue, "Malformed Known(0) must remain explicitly Known(0), not null.");
     }
 }

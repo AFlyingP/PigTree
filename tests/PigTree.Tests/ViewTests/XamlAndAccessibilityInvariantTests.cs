@@ -106,6 +106,18 @@ public class XamlAndAccessibilityInvariantTests
     }
 
     [TestMethod]
+    public void MainWindow_ExternalReferenceSummary_ConfiguresLiveSettingPoliteAndAutomationProperties()
+    {
+        string repoRoot = FindRepoRoot();
+        string xamlPath = Path.Combine(repoRoot, "src", "PigTree", "MainWindow.xaml");
+        string xaml = File.ReadAllText(xamlPath);
+
+        Assert.IsTrue(xaml.Contains("AutomationProperties.AutomationId=\"ExternalReferenceSummaryTextBlock\""), "ExternalReferenceSummaryTextBlock must have required AutomationId");
+        Assert.IsTrue(xaml.Contains("AutomationProperties.Name=\"External link uncertainty summary\""), "ExternalReferenceSummaryTextBlock must have required Name");
+        Assert.IsTrue(xaml.Contains("AutomationProperties.LiveSetting=\"Polite\""), "ExternalReferenceSummaryTextBlock must configure Polite LiveSetting");
+    }
+
+    [TestMethod]
     public void AppXaml_ListViewItemStyle_ContainsKeyboardFocusIndicator()
     {
         string repoRoot = FindRepoRoot();

@@ -308,4 +308,60 @@ public class MainViewModelTests
         Assert.IsTrue(rootVm.IsExpanded);
         Assert.AreEqual(2, _viewModel.VisibleTreeItems.Count);
     }
+
+    [TestMethod]
+    public async Task ScanResult_WithIndeterminateExternalReferences_PopulatesSummaryTextAndFlags()
+    {
+        _fileSystem.AddDirectory(@"C:Target");
+        _viewModel.TargetPath = @"C:Target";
+
+        var root = new TreeNodeData(1, 0, @"C:Target", 1, 1000, 1000, true, 0, false);
+        _pageProvider.SetRoot(root);
+
+        _engineSession.StartScanHandler = (path, progress, ct) => Task.FromResult(new ScanResult
+        {
+            OperationId = "op-indet",
+            TargetPath = path,
+            Outcome = ScanOutcome.Finished,
+            DirectoryCount = 1,
+            FileCount = 5,
+            LogicalBytes = 1000,
+            AllocatedBytes = 1000,
+            IndeterminateExternalReferenceObjects = 7
+        });
+
+        await _viewModel.ScanCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(7UL, _viewModel.IndeterminateExternalReferenceObjects);
+        Assert.IsTrue(_viewModel.HasExternalReferenceSummary);
+        Assert.AreEqual("External link uncertainty: 7 objects with indeterminate references", _viewModel.ExternalReferenceSummaryText);
+    }
+
+    [TestMethod]
+    public async Task ScanResult_WithZeroIndeterminateExternalReferences_HasNoSummary()
+    {
+        _fileSystem.AddDirectory(@"C:Target");
+        _viewModel.TargetPath = @"C:Target";
+
+        var root = new TreeNodeData(1, 0, @"C:Target", 1, 1000, 1000, true, 0, false);
+        _pageProvider.SetRoot(root);
+
+        _engineSession.StartScanHandler = (path, progress, ct) => Task.FromResult(new ScanResult
+        {
+            OperationId = "op-zero-indet",
+            TargetPath = path,
+            Outcome = ScanOutcome.Finished,
+            DirectoryCount = 1,
+            FileCount = 5,
+            LogicalBytes = 1000,
+            AllocatedBytes = 1000,
+            IndeterminateExternalReferenceObjects = 0
+        });
+
+        await _viewModel.ScanCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(0UL, _viewModel.IndeterminateExternalReferenceObjects);
+        Assert.IsFalse(_viewModel.HasExternalReferenceSummary);
+        Assert.AreEqual(string.Empty, _viewModel.ExternalReferenceSummaryText);
+    }
 }

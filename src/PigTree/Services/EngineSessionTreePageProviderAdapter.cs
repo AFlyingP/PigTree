@@ -49,13 +49,19 @@ public sealed class EngineSessionTreePageProviderAdapter : ITreePageProvider
             ParentId: entry.ParentId,
             Name: entry.Name,
             EntryKind: entry.EntryKind,
-            LogicalSize: entry.LogicalSize,
-            AllocatedSize: entry.AllocatedSize,
+            LogicalBytes: entry.LogicalBytes,
+            ReferencedAllocatedBytes: entry.ReferencedAllocatedBytes,
             AllocatedSizeKnown: entry.AllocatedSizeKnown,
             ChildCount: entry.ChildCount,
             HasChildren: entry.HasChildren,
             ScopeCoverage: "Complete",
-            CoverageGaps: 0
+            CoverageGaps: 0,
+            UniqueAllocatedBytes: entry.UniqueAllocatedBytes,
+            ObservedAliasCount: entry.ObservedAliasCount,
+            TotalLinkCountStatus: entry.TotalLinkCountStatus,
+            TotalLinkCountValue: entry.TotalLinkCountValue,
+            ExternalReferenceStatus: entry.ExternalReferenceStatus,
+            KnownSubtotalAllocatedBytes: entry.KnownSubtotalAllocatedBytes
         );
     }
 }

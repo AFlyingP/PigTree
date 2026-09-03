@@ -103,7 +103,7 @@ public sealed class ProgressCoalescer : IProgress<ScanProgressReport>, IDisposab
             Directories = report.ObservedDirectories,
             Files = report.ObservedFiles,
             LogicalBytes = report.ObservedLogicalBytes,
-            AllocatedBytes = report.ObservedAllocatedBytes,
+            ReferencedAllocatedBytes = report.ObservedReferencedAllocatedBytes,
             CoverageGaps = report.CoverageGaps,
             CurrentPhase = report.CurrentPhase,
             CurrentDirectory = report.CurrentDirectory,

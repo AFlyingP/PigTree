@@ -28,6 +28,9 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     private string _observedDirectoriesText = "0";
     private string _observedLogicalSizeText = "0 B";
     private string _observedAllocatedSizeText = "0 B";
+    private bool _showUniqueAllocatedColumn;
+    private ulong _indeterminateExternalReferenceObjects;
+    private string _externalReferenceSummaryText = string.Empty;
     private uint _coverageGapsCount;
     private bool _hasError;
     private string _errorMessage = string.Empty;
@@ -124,6 +127,47 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         get => _observedAllocatedSizeText;
         set => SetProperty(ref _observedAllocatedSizeText, value);
     }
+
+    /// <summary>
+    /// Toggles the "Unique Allocated" tree column (each distinct object counted once);
+    /// hidden by default.
+    /// </summary>
+    public bool ShowUniqueAllocatedColumn
+    {
+        get => _showUniqueAllocatedColumn;
+        set => SetProperty(ref _showUniqueAllocatedColumn, value);
+    }
+
+    /// <summary>Objects with indeterminate external reference evidence at scan target level (issue #20 AC-7).</summary>
+    public ulong IndeterminateExternalReferenceObjects
+    {
+        get => _indeterminateExternalReferenceObjects;
+        private set
+        {
+            if (SetProperty(ref _indeterminateExternalReferenceObjects, value))
+            {
+                OnPropertyChanged(nameof(HasExternalReferenceSummary));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Summary-level uncertainty text for indeterminate external references; empty when
+    /// there is nothing to report (never badged per row).
+    /// </summary>
+    public string ExternalReferenceSummaryText
+    {
+        get => _externalReferenceSummaryText;
+        private set
+        {
+            if (SetProperty(ref _externalReferenceSummaryText, value))
+            {
+                OnPropertyChanged(nameof(HasExternalReferenceSummary));
+            }
+        }
+    }
+
+    public bool HasExternalReferenceSummary => !string.IsNullOrEmpty(ExternalReferenceSummaryText);
 
     public uint CoverageGapsCount
     {
@@ -229,6 +273,8 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         HasError = false;
         ErrorMessage = string.Empty;
         ErrorDetails = string.Empty;
+        IndeterminateExternalReferenceObjects = 0;
+        ExternalReferenceSummaryText = string.Empty;
         _currentOperationId = Guid.NewGuid().ToString("N");
 
         State = ScanState.Starting;
@@ -252,6 +298,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         {
             var result = await _engineSession.StartScanAsync(path, _coalescer, ct);
             _coalescer.Flush();
+            ApplyExternalReferenceSummary(result.IndeterminateExternalReferenceObjects);
 
             if (result.Outcome == ScanOutcome.Cancelled || ct.IsCancellationRequested)
             {
@@ -376,13 +423,21 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         StatusText = "Engine initialization failed";
     }
 
+    private void ApplyExternalReferenceSummary(ulong indeterminateExternalReferenceObjects)
+    {
+        IndeterminateExternalReferenceObjects = indeterminateExternalReferenceObjects;
+        ExternalReferenceSummaryText = indeterminateExternalReferenceObjects == 0
+            ? string.Empty
+            : $"External link uncertainty: {indeterminateExternalReferenceObjects.ToString("N0")} objects with indeterminate references";
+    }
+
     private void OnProgressUpdate(CoalescedProgressState state)
     {
         ElapsedText = state.FormattedElapsed;
         ObservedFilesText = state.FormattedFiles;
         ObservedDirectoriesText = state.FormattedDirectories;
         ObservedLogicalSizeText = state.FormattedLogicalBytes;
-        ObservedAllocatedSizeText = state.FormattedAllocatedBytes;
+        ObservedAllocatedSizeText = state.FormattedReferencedAllocatedBytes;
         CoverageGapsCount = state.CoverageGaps;
         CurrentDirectory = state.CurrentDirectory;
         StatusText = $"Scanning ({state.FormattedFiles} files, {state.FormattedLogicalBytes})...";

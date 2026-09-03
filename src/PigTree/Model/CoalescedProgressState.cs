@@ -9,7 +9,7 @@ public sealed class CoalescedProgressState
     public ulong Directories { get; init; }
     public ulong Files { get; init; }
     public ulong LogicalBytes { get; init; }
-    public ulong AllocatedBytes { get; init; }
+    public ulong ReferencedAllocatedBytes { get; init; }
     public uint CoverageGaps { get; init; }
     public string CurrentPhase { get; init; } = string.Empty;
     public string CurrentDirectory { get; init; } = string.Empty;
@@ -18,7 +18,7 @@ public sealed class CoalescedProgressState
     public string FormattedDirectories => Directories.ToString("N0");
     public string FormattedFiles => Files.ToString("N0");
     public string FormattedLogicalBytes => FormatBytes(LogicalBytes);
-    public string FormattedAllocatedBytes => FormatBytes(AllocatedBytes);
+    public string FormattedReferencedAllocatedBytes => FormatBytes(ReferencedAllocatedBytes);
     public string FormattedElapsed => Elapsed.TotalHours >= 1
         ? $"{(int)Elapsed.TotalHours:00}:{Elapsed.Minutes:00}:{Elapsed.Seconds:00}"
         : $"{Elapsed.Minutes:00}:{Elapsed.Seconds:00}.{Elapsed.Milliseconds / 100}";

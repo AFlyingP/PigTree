@@ -9,6 +9,7 @@
             <conv:BooleanToVisibilityConverter x:Key="InverseBoolToVis" Inverse="True" />
             <conv:LevelToIndentMarginConverter x:Key="LevelToMargin" />
             <conv:ExpandCollapseIconConverter x:Key="ExpandIconConv" />
+            <conv:BooleanToColumnWidthConverter x:Key="UniqueColumnWidth" VisibleWidth="130" />
 
             <Style TargetType="Window">
                 <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.WindowBrushKey}}" />
