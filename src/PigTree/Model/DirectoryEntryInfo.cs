@@ -53,8 +53,12 @@ public sealed class DirectoryEntryInfo
     public string TotalLinkCountStatus { get; init; } = LinkCountKnowledge.NotObserved;
     public uint? TotalLinkCountValue { get; init; }
 
-    /// <summary>One of <see cref="ExternalReference"/> canonical strings.</summary>
-    public string ExternalReferenceStatus { get; init; } = ExternalReference.ConfirmedNone;
+    /// <summary>
+    /// One of <see cref="ExternalReference"/> canonical strings. Defaults to
+    /// indeterminate: a confirmed state is only ever earned through evidence,
+    /// never assumed (ADR 0003 fail-closed rule).
+    /// </summary>
+    public string ExternalReferenceStatus { get; init; } = ExternalReference.Indeterminate;
 
     /// <summary>Subtotal of allocations that are known without ambiguity.</summary>
     public ulong KnownSubtotalAllocatedBytes { get; init; }
