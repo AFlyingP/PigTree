@@ -572,6 +572,11 @@ fn run() -> u8 {
                         let resp_logical_bytes = graph.terminal().total_logical_bytes;
                         let resp_allocated_bytes = graph.terminal().total_allocated_bytes;
                         let resp_allocated_known = graph.allocated_bytes_known();
+                        let resp_referenced_allocated_bytes = graph.referenced_allocated_bytes();
+                        let resp_unique_allocated_bytes = graph.unique_allocated_bytes();
+                        let resp_known_subtotal = graph.known_subtotal_allocated_bytes();
+                        let resp_indeterminate_objects =
+                            graph.indeterminate_external_reference_objects();
 
                         settled_scan = Some(SettledScan {
                             operation_id: active_op_id.clone(),
@@ -593,6 +598,10 @@ fn run() -> u8 {
                             allocated_bytes_known: resp_allocated_known,
                             coverage_gaps,
                             duration_ms,
+                            referenced_allocated_bytes: resp_referenced_allocated_bytes,
+                            unique_allocated_bytes: resp_unique_allocated_bytes,
+                            known_subtotal_allocated_bytes: resp_known_subtotal,
+                            indeterminate_external_reference_objects: resp_indeterminate_objects,
                         }
                     }
                     Some(Ok(Err(_err))) => {
@@ -616,6 +625,10 @@ fn run() -> u8 {
                             allocated_bytes_known: false,
                             coverage_gaps: vec![],
                             duration_ms,
+                            referenced_allocated_bytes: 0,
+                            unique_allocated_bytes: 0,
+                            known_subtotal_allocated_bytes: 0,
+                            indeterminate_external_reference_objects: 0,
                         }
                     }
                     _ => {
@@ -639,6 +652,10 @@ fn run() -> u8 {
                             allocated_bytes_known: false,
                             coverage_gaps: vec![],
                             duration_ms,
+                            referenced_allocated_bytes: 0,
+                            unique_allocated_bytes: 0,
+                            known_subtotal_allocated_bytes: 0,
+                            indeterminate_external_reference_objects: 0,
                         }
                     }
                 };
