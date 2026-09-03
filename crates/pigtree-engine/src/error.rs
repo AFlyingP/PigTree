@@ -19,6 +19,9 @@ pub enum GraphBuildError {
         parent_id: u32,
     },
     SelfParent(u32),
+    UnknownStreamParent {
+        entry_id: u32,
+    },
     RecordAfterTerminal,
     DuplicateTerminal,
     MissingTerminal,
@@ -65,6 +68,12 @@ impl fmt::Display for GraphBuildError {
             }
             GraphBuildError::SelfParent(id) => {
                 write!(f, "entry {id} has self-referencing parent_id")
+            }
+            GraphBuildError::UnknownStreamParent { entry_id } => {
+                write!(
+                    f,
+                    "content stream references entry {entry_id} which has not been observed"
+                )
             }
             GraphBuildError::RecordAfterTerminal => {
                 write!(f, "received observation record after terminal record")

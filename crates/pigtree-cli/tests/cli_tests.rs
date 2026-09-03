@@ -906,7 +906,7 @@ fn test_cli_scan_valid_hierarchy_json_mode() {
         .starts_with("scan"));
     assert_eq!(
         obj.get("schema_version").and_then(|v| v.as_str()),
-        Some("1.0")
+        Some("2.0")
     );
     assert_eq!(
         obj.get("run_outcome").and_then(|v| v.as_str()),
@@ -927,7 +927,7 @@ fn test_cli_scan_valid_hierarchy_json_mode() {
         Some(0.0)
     );
     assert_eq!(
-        obj.get("referenced_logical_bytes").and_then(|v| v.as_f64()),
+        obj.get("logical_bytes").and_then(|v| v.as_f64()),
         Some(135.0)
     );
 
@@ -938,7 +938,7 @@ fn test_cli_scan_valid_hierarchy_json_mode() {
     assert!(alloc.get("value").is_some());
     assert_eq!(
         alloc.get("knowledge").and_then(|v| v.as_str()),
-        Some("not_observed")
+        Some("known")
     );
 
     let interval = obj
@@ -1014,7 +1014,7 @@ fn test_cli_scan_valid_hierarchy_ndjson_mode() {
         assert!(op_id.starts_with("scan"));
         assert_eq!(
             obj.get("schema_version").and_then(|v| v.as_str()),
-            Some("1.0")
+            Some("2.0")
         );
         assert_eq!(
             obj.get("provenance").and_then(|v| v.as_str()),
@@ -1066,9 +1066,7 @@ fn test_cli_scan_valid_hierarchy_ndjson_mode() {
                 Some(0.0)
             );
             assert_eq!(
-                payload
-                    .get("referenced_logical_bytes")
-                    .and_then(|v| v.as_f64()),
+                payload.get("logical_bytes").and_then(|v| v.as_f64()),
                 Some(135.0)
             );
         } else {
@@ -1133,8 +1131,7 @@ fn test_cli_scan_target_with_spaces() {
     assert_eq!(json.get("directories").and_then(|v| v.as_f64()), Some(1.0));
     assert_eq!(json.get("files").and_then(|v| v.as_f64()), Some(1.0));
     assert_eq!(
-        json.get("referenced_logical_bytes")
-            .and_then(|v| v.as_f64()),
+        json.get("logical_bytes").and_then(|v| v.as_f64()),
         Some(19.0)
     );
 
@@ -1518,7 +1515,7 @@ fn test_cli_scan_ndjson_cancellation_exits_3_under_2s() {
         assert!(op_id.starts_with("scan"));
         assert_eq!(
             obj.get("schema_version").and_then(|v| v.as_str()),
-            Some("1.0")
+            Some("2.0")
         );
         assert_eq!(
             obj.get("provenance").and_then(|v| v.as_str()),

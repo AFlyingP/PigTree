@@ -247,7 +247,7 @@ public sealed class EngineClientSession : IEngineSession
                     p.ObservedDirectories,
                     p.ObservedFiles,
                     p.ObservedLogicalBytes,
-                    p.ObservedAllocatedBytes,
+                    p.ObservedReferencedAllocatedBytes,
                     p.CoverageGaps,
                     p.CurrentPhase,
                     p.CurrentDirectory));
@@ -297,6 +297,10 @@ public sealed class EngineClientSession : IEngineSession
                         LogicalBytes = r.LogicalBytes,
                         AllocatedBytes = r.AllocatedBytes,
                         AllocatedBytesKnown = r.AllocatedBytesKnown,
+                        ReferencedAllocatedBytes = r.ReferencedAllocatedBytes,
+                        UniqueAllocatedBytes = r.UniqueAllocatedBytes,
+                        KnownSubtotalAllocatedBytes = r.KnownSubtotalAllocatedBytes,
+                        IndeterminateExternalReferenceObjects = r.IndeterminateExternalReferenceObjects,
                         DurationMs = r.DurationMs,
                         CoverageGaps = gaps
                     };
@@ -372,19 +376,60 @@ public sealed class EngineClientSession : IEngineSession
             throw new InvalidDataException("GetChildren response variant not present in CommandResponse");
         }
 
-        return cmdResp.GetChildren.Nodes.Select(n => new DirectoryEntryInfo
+        return MapDirectoryEntries(cmdResp.GetChildren.Nodes);
+    }
+
+    public static IReadOnlyList<DirectoryEntryInfo> MapDirectoryEntries(IEnumerable<DirectoryEntryNode> nodes)
+    {
+        return nodes.Select(n => new DirectoryEntryInfo
         {
             Id = n.Id,
             ParentId = n.ParentId,
             Name = n.Name,
             EntryKind = n.EntryKind,
-            LogicalSize = n.LogicalSize,
-            AllocatedSize = n.AllocatedSize,
+            LogicalBytes = n.LogicalBytes,
+            ReferencedAllocatedBytes = n.ReferencedAllocatedBytes,
             AllocatedSizeKnown = n.AllocatedSizeKnown,
             ChildCount = n.ChildCount,
-            HasChildren = n.HasChildren
+            HasChildren = n.HasChildren,
+            UniqueAllocatedBytes = n.UniqueAllocatedBytes,
+            ObservedAliasCount = n.ObservedAliasCount > 0 ? n.ObservedAliasCount : 1,
+            TotalLinkCountStatus = n.TotalLinkCount != null
+                ? MapLinkCountKnowledgeStatus(n.TotalLinkCount.Status)
+                : LinkCountKnowledge.NotObserved,
+            TotalLinkCountValue = (n.TotalLinkCount != null && n.TotalLinkCount.Status == LinkCountKnowledgeStatus.Known)
+                ? n.TotalLinkCount.Count
+                : null,
+            ExternalReferenceStatus = MapExternalReferenceStatus(n.ExternalReferenceStatus),
+            KnownSubtotalAllocatedBytes = n.KnownSubtotalAllocatedBytes
         }).ToList();
     }
+
+    /// <summary>
+    /// Maps the proto link count knowledge status to the canonical lowercase strings used
+    /// by the presentation layer. Unspecified is treated as not observed so that missing
+    /// knowledge is never presented as a known value.
+    /// </summary>
+    public static string MapLinkCountKnowledgeStatus(LinkCountKnowledgeStatus status) => status switch
+    {
+        LinkCountKnowledgeStatus.Known => LinkCountKnowledge.Known,
+        LinkCountKnowledgeStatus.Unavailable => LinkCountKnowledge.Unavailable,
+        LinkCountKnowledgeStatus.NotApplicable => LinkCountKnowledge.NotApplicable,
+        _ => LinkCountKnowledge.NotObserved // NotObserved, Unspecified, and unknown mean "not observed"
+    };
+
+    /// <summary>
+    /// Maps the proto external reference status to the canonical lowercase strings used by
+    /// the presentation layer. Unspecified or unknown statuses fail-closed to indeterminate.
+    /// </summary>
+    public static string MapExternalReferenceStatus(ExternalReferenceStatusProto status) => status switch
+    {
+        ExternalReferenceStatusProto.ExternalReferenceStatusConfirmedNone => ExternalReference.ConfirmedNone,
+        ExternalReferenceStatusProto.ExternalReferenceStatusConfirmedExternal => ExternalReference.ConfirmedExternal,
+        ExternalReferenceStatusProto.ExternalReferenceStatusInconsistentEvidence => ExternalReference.InconsistentEvidence,
+        ExternalReferenceStatusProto.ExternalReferenceStatusNotApplicable => ExternalReference.NotApplicable,
+        _ => ExternalReference.Indeterminate // Unspecified, Indeterminate, and unknown all map to indeterminate
+    };
 
     public async Task CancelAsync(string operationId, string reason = "User requested cancellation", CancellationToken cancellationToken = default)
     {

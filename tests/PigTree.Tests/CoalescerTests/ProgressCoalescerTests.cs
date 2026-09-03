@@ -81,7 +81,7 @@ public class ProgressCoalescerTests
                 ObservedDirectories: i * 10,
                 ObservedFiles: i * 100,
                 ObservedLogicalBytes: i * 1024 * 1024,
-                ObservedAllocatedBytes: i * 1024 * 1024,
+                ObservedReferencedAllocatedBytes: i * 1024 * 1024,
                 CoverageGaps: 0,
                 CurrentPhase: "Scanning",
                 CurrentDirectory: $"C:\\Folder\\Sub{i}"));

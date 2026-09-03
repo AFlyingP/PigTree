@@ -2,6 +2,7 @@ use pigtree_engine::{build_graph_from_reader, EntryKind, GraphBuildError, GraphB
 use pigtree_protocol::{
     CoverageGapObservation, DirectoryObservation, FileObservation, ObservationReader,
     ObservationRecord, ObservationWriter, RunOutcome, SpecialObservation, TerminalObservation,
+    ValueKnowledge,
 };
 use std::io::Cursor;
 
@@ -21,6 +22,9 @@ fn test_valid_hierarchy_gap_and_counts() {
             creation_time_utc_ms: 100,
             last_write_time_utc_ms: 200,
             last_access_time_utc_ms: 300,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -35,6 +39,9 @@ fn test_valid_hierarchy_gap_and_counts() {
             creation_time_utc_ms: 101,
             last_write_time_utc_ms: 201,
             last_access_time_utc_ms: 301,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -51,6 +58,8 @@ fn test_valid_hierarchy_gap_and_counts() {
             creation_time_utc_ms: 102,
             last_write_time_utc_ms: 202,
             last_access_time_utc_ms: 302,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -67,6 +76,8 @@ fn test_valid_hierarchy_gap_and_counts() {
             creation_time_utc_ms: 103,
             last_write_time_utc_ms: 203,
             last_access_time_utc_ms: 303,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -81,6 +92,7 @@ fn test_valid_hierarchy_gap_and_counts() {
             creation_time_utc_ms: 104,
             last_write_time_utc_ms: 204,
             last_access_time_utc_ms: 304,
+            object_id: None,
         })
         .unwrap();
 
@@ -188,6 +200,9 @@ fn test_duplicate_id_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -203,6 +218,8 @@ fn test_duplicate_id_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -219,6 +236,8 @@ fn test_duplicate_id_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -245,6 +264,9 @@ fn test_missing_or_out_of_order_parent_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -261,6 +283,8 @@ fn test_missing_or_out_of_order_parent_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -294,6 +318,9 @@ fn test_invalid_root_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -321,6 +348,9 @@ fn test_invalid_root_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -350,6 +380,9 @@ fn test_parent_not_directory_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -366,6 +399,8 @@ fn test_parent_not_directory_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -382,6 +417,8 @@ fn test_parent_not_directory_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -412,6 +449,9 @@ fn test_aggregate_mismatch_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -454,6 +494,9 @@ fn test_missing_terminal_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -478,6 +521,9 @@ fn test_record_after_terminal_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -506,6 +552,8 @@ fn test_record_after_terminal_rejected() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -530,6 +578,9 @@ fn test_corrupt_or_truncated_stream_fails_cleanly() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -557,6 +608,9 @@ fn test_allocated_zero_preserved_as_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -572,6 +626,8 @@ fn test_allocated_zero_preserved_as_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -615,6 +671,9 @@ fn test_allocated_knowledge_empty_files_known_zero() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -628,6 +687,7 @@ fn test_allocated_knowledge_empty_files_known_zero() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
         })
         .unwrap();
 
@@ -664,6 +724,9 @@ fn test_allocated_knowledge_all_files_some_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -679,6 +742,8 @@ fn test_allocated_knowledge_all_files_some_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -694,6 +759,8 @@ fn test_allocated_knowledge_all_files_some_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -707,6 +774,7 @@ fn test_allocated_knowledge_all_files_some_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
         })
         .unwrap();
 
@@ -743,6 +811,9 @@ fn test_allocated_knowledge_mixed_some_and_none_is_not_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -759,6 +830,8 @@ fn test_allocated_knowledge_mixed_some_and_none_is_not_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -775,6 +848,8 @@ fn test_allocated_knowledge_mixed_some_and_none_is_not_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -791,6 +866,8 @@ fn test_allocated_knowledge_mixed_some_and_none_is_not_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -828,6 +905,9 @@ fn test_allocated_knowledge_all_none_is_not_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -843,6 +923,8 @@ fn test_allocated_knowledge_all_none_is_not_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -858,6 +940,8 @@ fn test_allocated_knowledge_all_none_is_not_known() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -892,6 +976,9 @@ fn test_incremental_builder_and_self_parent_rejection() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap_err();
     assert!(matches!(err1, GraphBuildError::SelfParent(1)));
@@ -907,6 +994,9 @@ fn test_incremental_builder_and_self_parent_rejection() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
 
@@ -921,6 +1011,9 @@ fn test_incremental_builder_and_self_parent_rejection() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap_err();
     assert!(matches!(err2, GraphBuildError::SelfParent(2)));
@@ -957,6 +1050,9 @@ fn test_graph_children_pagination_and_node_fields() {
             creation_time_utc_ms: 10,
             last_write_time_utc_ms: 20,
             last_access_time_utc_ms: 30,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -971,6 +1067,9 @@ fn test_graph_children_pagination_and_node_fields() {
             creation_time_utc_ms: 11,
             last_write_time_utc_ms: 21,
             last_access_time_utc_ms: 31,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -987,6 +1086,8 @@ fn test_graph_children_pagination_and_node_fields() {
             creation_time_utc_ms: 12,
             last_write_time_utc_ms: 22,
             last_access_time_utc_ms: 32,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1003,6 +1104,8 @@ fn test_graph_children_pagination_and_node_fields() {
             creation_time_utc_ms: 13,
             last_write_time_utc_ms: 23,
             last_access_time_utc_ms: 33,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1048,8 +1151,8 @@ fn test_graph_children_pagination_and_node_fields() {
     assert_eq!(children[1].parent_id, 1);
     assert_eq!(children[1].name, "file_root.bin");
     assert_eq!(children[1].entry_kind, 2);
-    assert_eq!(children[1].logical_size, 500);
-    assert_eq!(children[1].allocated_size, 512);
+    assert_eq!(children[1].logical_bytes, 500);
+    assert_eq!(children[1].referenced_allocated_bytes, 512);
     assert!(children[1].allocated_size_known);
     assert_eq!(children[1].child_count, 0);
     assert!(!children[1].has_children);
@@ -1060,8 +1163,8 @@ fn test_graph_children_pagination_and_node_fields() {
     assert_eq!(dira_children.len(), 1);
     assert_eq!(dira_children[0].id, 3);
     assert_eq!(dira_children[0].name, "file_a.txt");
-    assert_eq!(dira_children[0].logical_size, 1000);
-    assert_eq!(dira_children[0].allocated_size, 4096);
+    assert_eq!(dira_children[0].logical_bytes, 1000);
+    assert_eq!(dira_children[0].referenced_allocated_bytes, 4096);
     assert!(dira_children[0].allocated_size_known);
     assert_eq!(dira_children[0].child_count, 0);
     assert!(!dira_children[0].has_children);
@@ -1089,6 +1192,9 @@ fn test_graph_stable_ordering_rules() {
             creation_time_utc_ms: 10,
             last_write_time_utc_ms: 20,
             last_access_time_utc_ms: 30,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1103,6 +1209,9 @@ fn test_graph_stable_ordering_rules() {
             creation_time_utc_ms: 11,
             last_write_time_utc_ms: 21,
             last_access_time_utc_ms: 31,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1117,6 +1226,9 @@ fn test_graph_stable_ordering_rules() {
             creation_time_utc_ms: 13,
             last_write_time_utc_ms: 23,
             last_access_time_utc_ms: 33,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1131,6 +1243,9 @@ fn test_graph_stable_ordering_rules() {
             creation_time_utc_ms: 15,
             last_write_time_utc_ms: 25,
             last_access_time_utc_ms: 35,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1147,6 +1262,8 @@ fn test_graph_stable_ordering_rules() {
             creation_time_utc_ms: 17,
             last_write_time_utc_ms: 27,
             last_access_time_utc_ms: 37,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1163,6 +1280,8 @@ fn test_graph_stable_ordering_rules() {
             creation_time_utc_ms: 18,
             last_write_time_utc_ms: 28,
             last_access_time_utc_ms: 38,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1179,6 +1298,8 @@ fn test_graph_stable_ordering_rules() {
             creation_time_utc_ms: 19,
             last_write_time_utc_ms: 29,
             last_access_time_utc_ms: 39,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1195,6 +1316,8 @@ fn test_graph_stable_ordering_rules() {
             creation_time_utc_ms: 20,
             last_write_time_utc_ms: 30,
             last_access_time_utc_ms: 40,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1278,6 +1401,9 @@ fn test_graph_builder_progress_nested_path_reconstruction() {
             creation_time_utc_ms: 100,
             last_write_time_utc_ms: 200,
             last_access_time_utc_ms: 300,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
     assert_eq!(builder.current_directory_path(), r"C:\ProjectRoot");
@@ -1295,6 +1421,8 @@ fn test_graph_builder_progress_nested_path_reconstruction() {
             creation_time_utc_ms: 101,
             last_write_time_utc_ms: 201,
             last_access_time_utc_ms: 301,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
     assert_eq!(builder.current_directory_path(), r"C:\ProjectRoot");
@@ -1310,6 +1438,9 @@ fn test_graph_builder_progress_nested_path_reconstruction() {
             creation_time_utc_ms: 102,
             last_write_time_utc_ms: 202,
             last_access_time_utc_ms: 302,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
     assert_eq!(builder.current_directory_path(), r"C:\ProjectRoot");
@@ -1327,6 +1458,8 @@ fn test_graph_builder_progress_nested_path_reconstruction() {
             creation_time_utc_ms: 103,
             last_write_time_utc_ms: 203,
             last_access_time_utc_ms: 303,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
     assert_eq!(builder.current_directory_path(), r"C:\ProjectRoot\FolderA");
@@ -1342,6 +1475,9 @@ fn test_graph_builder_progress_nested_path_reconstruction() {
             creation_time_utc_ms: 104,
             last_write_time_utc_ms: 204,
             last_access_time_utc_ms: 304,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
     assert_eq!(builder.current_directory_path(), r"C:\ProjectRoot\FolderA");
@@ -1359,6 +1495,8 @@ fn test_graph_builder_progress_nested_path_reconstruction() {
             creation_time_utc_ms: 105,
             last_write_time_utc_ms: 205,
             last_access_time_utc_ms: 305,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
     assert_eq!(
@@ -1384,6 +1522,9 @@ fn test_graph_builder_progress_root_trailing_slash_nested_path() {
             creation_time_utc_ms: 100,
             last_write_time_utc_ms: 200,
             last_access_time_utc_ms: 300,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
     assert_eq!(builder.current_directory_path(), r"C:\");
@@ -1399,6 +1540,9 @@ fn test_graph_builder_progress_root_trailing_slash_nested_path() {
             creation_time_utc_ms: 101,
             last_write_time_utc_ms: 201,
             last_access_time_utc_ms: 301,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
 
@@ -1415,6 +1559,8 @@ fn test_graph_builder_progress_root_trailing_slash_nested_path() {
             creation_time_utc_ms: 102,
             last_write_time_utc_ms: 202,
             last_access_time_utc_ms: 302,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
     assert_eq!(builder.current_directory_path(), r"C:\Users");
@@ -1430,6 +1576,9 @@ fn test_graph_builder_progress_root_trailing_slash_nested_path() {
             creation_time_utc_ms: 103,
             last_write_time_utc_ms: 203,
             last_access_time_utc_ms: 303,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
 
@@ -1446,6 +1595,8 @@ fn test_graph_builder_progress_root_trailing_slash_nested_path() {
             creation_time_utc_ms: 104,
             last_write_time_utc_ms: 204,
             last_access_time_utc_ms: 304,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
     assert_eq!(builder.current_directory_path(), r"C:\Users\testuser");
@@ -1466,6 +1617,9 @@ fn test_graph_builder_build_from_reader_with_progress_emits_truthful_current_dir
             creation_time_utc_ms: 100,
             last_write_time_utc_ms: 200,
             last_access_time_utc_ms: 300,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1479,6 +1633,9 @@ fn test_graph_builder_build_from_reader_with_progress_emits_truthful_current_dir
             creation_time_utc_ms: 101,
             last_write_time_utc_ms: 201,
             last_access_time_utc_ms: 301,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1494,6 +1651,8 @@ fn test_graph_builder_build_from_reader_with_progress_emits_truthful_current_dir
             creation_time_utc_ms: 102,
             last_write_time_utc_ms: 202,
             last_access_time_utc_ms: 302,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1552,6 +1711,9 @@ fn test_directory_subtree_aggregate_repro() {
             creation_time_utc_ms: 10,
             last_write_time_utc_ms: 20,
             last_access_time_utc_ms: 30,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1566,6 +1728,9 @@ fn test_directory_subtree_aggregate_repro() {
             creation_time_utc_ms: 11,
             last_write_time_utc_ms: 21,
             last_access_time_utc_ms: 31,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1582,6 +1747,8 @@ fn test_directory_subtree_aggregate_repro() {
             creation_time_utc_ms: 12,
             last_write_time_utc_ms: 22,
             last_access_time_utc_ms: 32,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1598,6 +1765,8 @@ fn test_directory_subtree_aggregate_repro() {
             creation_time_utc_ms: 13,
             last_write_time_utc_ms: 23,
             last_access_time_utc_ms: 33,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1614,6 +1783,8 @@ fn test_directory_subtree_aggregate_repro() {
             creation_time_utc_ms: 14,
             last_write_time_utc_ms: 24,
             last_access_time_utc_ms: 34,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1646,8 +1817,8 @@ fn test_directory_subtree_aggregate_repro() {
     let (total_root, root_nodes) = graph.get_children_page(0, 0, 10).unwrap();
     assert_eq!(total_root, 1);
     assert_eq!(root_nodes[0].id, 1);
-    assert_eq!(root_nodes[0].logical_size, 6024);
-    assert_eq!(root_nodes[0].allocated_size, 12288);
+    assert_eq!(root_nodes[0].logical_bytes, 6024);
+    assert_eq!(root_nodes[0].referenced_allocated_bytes, 12288);
     assert!(root_nodes[0].allocated_size_known);
 
     // GetChildren page checks for Root's children (parent_id = 1)
@@ -1660,8 +1831,8 @@ fn test_directory_subtree_aggregate_repro() {
     assert_eq!(nested_node.id, 2);
     assert_eq!(nested_node.name, "nested_folder");
     assert_eq!(nested_node.entry_kind, 1);
-    assert_eq!(nested_node.logical_size, 5000);
-    assert_eq!(nested_node.allocated_size, 8192);
+    assert_eq!(nested_node.logical_bytes, 5000);
+    assert_eq!(nested_node.referenced_allocated_bytes, 8192);
     assert!(nested_node.allocated_size_known);
     assert_eq!(nested_node.child_count, 1);
     assert!(nested_node.has_children);
@@ -1671,8 +1842,8 @@ fn test_directory_subtree_aggregate_repro() {
     assert_eq!(known_node.id, 4);
     assert_eq!(known_node.name, "known_file.dat");
     assert_eq!(known_node.entry_kind, 2);
-    assert_eq!(known_node.logical_size, 1024);
-    assert_eq!(known_node.allocated_size, 4096);
+    assert_eq!(known_node.logical_bytes, 1024);
+    assert_eq!(known_node.referenced_allocated_bytes, 4096);
     assert!(known_node.allocated_size_known);
     assert_eq!(known_node.child_count, 0);
     assert!(!known_node.has_children);
@@ -1681,8 +1852,8 @@ fn test_directory_subtree_aggregate_repro() {
     assert_eq!(empty_node.id, 5);
     assert_eq!(empty_node.name, "empty_file.txt");
     assert_eq!(empty_node.entry_kind, 2);
-    assert_eq!(empty_node.logical_size, 0);
-    assert_eq!(empty_node.allocated_size, 0);
+    assert_eq!(empty_node.logical_bytes, 0);
+    assert_eq!(empty_node.referenced_allocated_bytes, 0);
     assert!(empty_node.allocated_size_known);
     assert_eq!(empty_node.child_count, 0);
     assert!(!empty_node.has_children);
@@ -1712,6 +1883,9 @@ fn test_directory_aggregates_nested_depth() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1725,6 +1899,9 @@ fn test_directory_aggregates_nested_depth() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1740,6 +1917,8 @@ fn test_directory_aggregates_nested_depth() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1753,6 +1932,9 @@ fn test_directory_aggregates_nested_depth() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1768,6 +1950,8 @@ fn test_directory_aggregates_nested_depth() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1781,6 +1965,9 @@ fn test_directory_aggregates_nested_depth() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1796,6 +1983,8 @@ fn test_directory_aggregates_nested_depth() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1847,6 +2036,9 @@ fn test_directory_sorting_by_recursive_size() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1860,6 +2052,9 @@ fn test_directory_sorting_by_recursive_size() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1875,6 +2070,8 @@ fn test_directory_sorting_by_recursive_size() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1888,6 +2085,9 @@ fn test_directory_sorting_by_recursive_size() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1903,6 +2103,8 @@ fn test_directory_sorting_by_recursive_size() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1916,6 +2118,9 @@ fn test_directory_sorting_by_recursive_size() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1931,6 +2136,8 @@ fn test_directory_sorting_by_recursive_size() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1952,13 +2159,13 @@ fn test_directory_sorting_by_recursive_size() {
     let (total, children) = graph.get_children_page(1, 0, 10).unwrap();
     assert_eq!(total, 3);
     assert_eq!(children[0].name, "BigDir");
-    assert_eq!(children[0].logical_size, 10000);
+    assert_eq!(children[0].logical_bytes, 10000);
 
     assert_eq!(children[1].name, "MediumDir");
-    assert_eq!(children[1].logical_size, 500);
+    assert_eq!(children[1].logical_bytes, 500);
 
     assert_eq!(children[2].name, "SmallDir");
-    assert_eq!(children[2].logical_size, 100);
+    assert_eq!(children[2].logical_bytes, 100);
 }
 
 #[test]
@@ -1980,6 +2187,9 @@ fn test_empty_directory_aggregates_known_zero() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -1993,6 +2203,9 @@ fn test_empty_directory_aggregates_known_zero() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -2006,6 +2219,7 @@ fn test_empty_directory_aggregates_known_zero() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
         })
         .unwrap();
 
@@ -2034,8 +2248,8 @@ fn test_empty_directory_aggregates_known_zero() {
     assert_eq!(total, 2);
     // EmptyDir node
     let empty_dir_node = children.iter().find(|n| n.id == 2).unwrap();
-    assert_eq!(empty_dir_node.logical_size, 0);
-    assert_eq!(empty_dir_node.allocated_size, 0);
+    assert_eq!(empty_dir_node.logical_bytes, 0);
+    assert_eq!(empty_dir_node.referenced_allocated_bytes, 0);
     assert!(empty_dir_node.allocated_size_known);
     assert_eq!(empty_dir_node.child_count, 0);
     assert!(!empty_dir_node.has_children);
@@ -2063,6 +2277,9 @@ fn test_allocated_knowledge_propagation_and_known_subtotal() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -2076,6 +2293,9 @@ fn test_allocated_knowledge_propagation_and_known_subtotal() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -2091,6 +2311,8 @@ fn test_allocated_knowledge_propagation_and_known_subtotal() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -2106,6 +2328,8 @@ fn test_allocated_knowledge_propagation_and_known_subtotal() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -2119,6 +2343,9 @@ fn test_allocated_knowledge_propagation_and_known_subtotal() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -2134,6 +2361,8 @@ fn test_allocated_knowledge_propagation_and_known_subtotal() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -2173,11 +2402,11 @@ fn test_allocated_knowledge_propagation_and_known_subtotal() {
     // GetChildren verification
     let (_total, children) = graph.get_children_page(1, 0, 10).unwrap();
     let node_missing = children.iter().find(|n| n.id == 2).unwrap();
-    assert_eq!(node_missing.allocated_size, 4096);
+    assert_eq!(node_missing.referenced_allocated_bytes, 4096);
     assert!(!node_missing.allocated_size_known);
 
     let node_known = children.iter().find(|n| n.id == 5).unwrap();
-    assert_eq!(node_known.allocated_size, 8192);
+    assert_eq!(node_known.referenced_allocated_bytes, 8192);
     assert!(node_known.allocated_size_known);
 }
 
@@ -2201,6 +2430,9 @@ fn test_cancelled_partial_graph_aggregation() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -2214,6 +2446,9 @@ fn test_cancelled_partial_graph_aggregation() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -2229,6 +2464,8 @@ fn test_cancelled_partial_graph_aggregation() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         })
         .unwrap();
 
@@ -2255,8 +2492,8 @@ fn test_cancelled_partial_graph_aggregation() {
     assert_eq!(graph.root().allocated_size, Some(4096));
 
     let (_total, children) = graph.get_children_page(1, 0, 10).unwrap();
-    assert_eq!(children[0].logical_size, 2500);
-    assert_eq!(children[0].allocated_size, 4096);
+    assert_eq!(children[0].logical_bytes, 2500);
+    assert_eq!(children[0].referenced_allocated_bytes, 4096);
 }
 
 #[test]
@@ -2274,6 +2511,9 @@ fn test_deep_iterative_stack_safety() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            allocated_size: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
 
@@ -2288,6 +2528,9 @@ fn test_deep_iterative_stack_safety() {
                 creation_time_utc_ms: 0,
                 last_write_time_utc_ms: 0,
                 last_access_time_utc_ms: 0,
+                object_id: None,
+                allocated_size: None,
+                total_link_count: ValueKnowledge::NotObserved,
             }))
             .unwrap();
     }
@@ -2306,6 +2549,8 @@ fn test_deep_iterative_stack_safety() {
             creation_time_utc_ms: 0,
             last_write_time_utc_ms: 0,
             last_access_time_utc_ms: 0,
+            object_id: None,
+            total_link_count: ValueKnowledge::NotObserved,
         }))
         .unwrap();
 

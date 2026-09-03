@@ -91,7 +91,57 @@ public class AutomationPeerTests
 
             Assert.AreEqual(AutomationControlType.TreeItem, peer.GetAutomationControlType());
             Assert.AreEqual("TreeItem", peer.GetClassName());
-            Assert.AreEqual("Windows, 1 MB, 42 items", peer.GetName());
+            Assert.AreEqual("Windows, 1 MB, 1 MB, 42 items", peer.GetName());
+        });
+    }
+
+    [TestMethod]
+    public void TreeItemAutomationPeer_NameMentionsAliasesAndExternalLink_WhenPresent()
+    {
+        RunInSta(() =>
+        {
+            var treeView = new DirectoryTreeView();
+            var treeViewPeer = new DirectoryTreeViewAutomationPeer(treeView);
+            var node = new TreeNodeData(
+                1, 0, "Shared", 2,
+                LogicalBytes: 4096,
+                ReferencedAllocatedBytes: 8192,
+                AllocatedSizeKnown: true,
+                ChildCount: 0,
+                HasChildren: false,
+                ObservedAliasCount: 3,
+                ExternalReferenceStatus: ExternalReference.ConfirmedExternal);
+            var vm = new TreeItemViewModel(node, level: 0);
+            var peer = new TreeItemAutomationPeer(vm, treeViewPeer);
+
+            Assert.AreEqual("Shared, 4 KB, 8 KB, file, 3 aliases, external link", peer.GetName());
+        });
+    }
+
+    [TestMethod]
+    public void TreeItemAutomationPeer_IndeterminateExternalReference_HasNoExternalLinkInName_AnnouncesAliases()
+    {
+        RunInSta(() =>
+        {
+            var treeView = new DirectoryTreeView();
+            var treeViewPeer = new DirectoryTreeViewAutomationPeer(treeView);
+            var node = new TreeNodeData(
+                1, 0, "Doc.docx", 2,
+                LogicalBytes: 2048,
+                ReferencedAllocatedBytes: 4096,
+                AllocatedSizeKnown: true,
+                ChildCount: 0,
+                HasChildren: false,
+                ObservedAliasCount: 2,
+                ExternalReferenceStatus: ExternalReference.Indeterminate);
+            var vm = new TreeItemViewModel(node, level: 0);
+            var peer = new TreeItemAutomationPeer(vm, treeViewPeer);
+
+            string name = peer.GetName();
+            Assert.AreEqual("Doc.docx, 2 KB, 4 KB, file, 2 aliases", name);
+            Assert.IsFalse(name.Contains("external link", StringComparison.Ordinal));
+            Assert.IsFalse(vm.HasExternalLinkBadge);
+            Assert.AreEqual(string.Empty, vm.ExternalLinkBadgeText);
         });
     }
 

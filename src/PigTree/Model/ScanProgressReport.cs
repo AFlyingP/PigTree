@@ -7,7 +7,7 @@ public sealed record ScanProgressReport(
     ulong ObservedDirectories,
     ulong ObservedFiles,
     ulong ObservedLogicalBytes,
-    ulong ObservedAllocatedBytes,
+    ulong ObservedReferencedAllocatedBytes,
     uint CoverageGaps,
     string CurrentPhase,
     string CurrentDirectory = "");

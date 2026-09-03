@@ -5,7 +5,115 @@ use std::io::{self, Read, Write};
 use std::str::Utf8Error;
 
 pub const WORKER_MAGIC: [u8; 4] = [0x50, 0x54, 0x57, 0x4F]; // ASCII "PTWO"
-pub const WORKER_STREAM_VERSION: u16 = 0x0001;
+pub const WORKER_STREAM_VERSION_V1: u16 = 0x0001;
+pub const WORKER_STREAM_VERSION_V2: u16 = 0x0002;
+pub const WORKER_STREAM_VERSION: u16 = WORKER_STREAM_VERSION_V2;
+
+/// Canonical 128-bit object identity within a volume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct ObjectIdentity {
+    pub volume_guid: [u8; 16],
+    pub file_id: u128,
+}
+
+impl ObjectIdentity {
+    pub const fn new(volume_guid: [u8; 16], file_id: u128) -> Self {
+        Self {
+            volume_guid,
+            file_id,
+        }
+    }
+
+    pub const fn from_u64(volume_guid: [u8; 16], file_id: u64) -> Self {
+        Self {
+            volume_guid,
+            file_id: file_id as u128,
+        }
+    }
+}
+
+/// Four-state Value Knowledge model for domain observations and aggregations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub enum ValueKnowledge<T> {
+    Known(T),
+    #[default]
+    NotObserved,
+    Unavailable,
+    NotApplicable,
+}
+
+impl<T> ValueKnowledge<T> {
+    pub fn is_known(&self) -> bool {
+        matches!(self, ValueKnowledge::Known(_))
+    }
+
+    pub fn known_value(&self) -> Option<&T> {
+        match self {
+            ValueKnowledge::Known(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
+pub type TotalLinkCount = ValueKnowledge<u32>;
+
+/// Exact five-state external reference status derived from link knowledge and observed aliases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum ExternalReferenceStatus {
+    ConfirmedNone = 1,
+    ConfirmedExternal = 2,
+    Indeterminate = 3,
+    InconsistentEvidence = 4,
+    NotApplicable = 5,
+}
+
+impl ExternalReferenceStatus {
+    /// Exact derivation rule per CONTEXT.md and issue #20:
+    /// - NotApplicable: total link count is NotApplicable.
+    /// - InconsistentEvidence: total link count Known(k) where k < observed_alias_count.
+    /// - ConfirmedNone: total link count Known(k) where k == observed_alias_count.
+    /// - ConfirmedExternal: total link count Known(k) where k > observed_alias_count.
+    /// - Indeterminate: total link count is NotObserved or Unavailable (with observed_alias_count >= 1).
+    pub fn derive(total_link_count: ValueKnowledge<u32>, observed_alias_count: u32) -> Self {
+        match total_link_count {
+            ValueKnowledge::NotApplicable => ExternalReferenceStatus::NotApplicable,
+            ValueKnowledge::Known(k) => {
+                if k < observed_alias_count {
+                    ExternalReferenceStatus::InconsistentEvidence
+                } else if k == observed_alias_count {
+                    ExternalReferenceStatus::ConfirmedNone
+                } else {
+                    ExternalReferenceStatus::ConfirmedExternal
+                }
+            }
+            ValueKnowledge::NotObserved | ValueKnowledge::Unavailable => {
+                ExternalReferenceStatus::Indeterminate
+            }
+        }
+    }
+
+    pub fn from_u8(val: u8) -> Result<Self, ObservationDecodeError> {
+        match val {
+            1 => Ok(ExternalReferenceStatus::ConfirmedNone),
+            2 => Ok(ExternalReferenceStatus::ConfirmedExternal),
+            3 => Ok(ExternalReferenceStatus::Indeterminate),
+            4 => Ok(ExternalReferenceStatus::InconsistentEvidence),
+            5 => Ok(ExternalReferenceStatus::NotApplicable),
+            other => Err(ObservationDecodeError::InvalidExternalStatus(other)),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ExternalReferenceStatus::ConfirmedNone => "confirmed_none",
+            ExternalReferenceStatus::ConfirmedExternal => "confirmed_external",
+            ExternalReferenceStatus::Indeterminate => "indeterminate",
+            ExternalReferenceStatus::InconsistentEvidence => "inconsistent_evidence",
+            ExternalReferenceStatus::NotApplicable => "not_applicable",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -15,6 +123,7 @@ pub enum RecordTag {
     SpecialObject = 0x03,
     CoverageGap = 0x04,
     Terminal = 0x05,
+    ContentStream = 0x06,
 }
 
 impl RecordTag {
@@ -25,6 +134,7 @@ impl RecordTag {
             0x03 => Ok(RecordTag::SpecialObject),
             0x04 => Ok(RecordTag::CoverageGap),
             0x05 => Ok(RecordTag::Terminal),
+            0x06 => Ok(RecordTag::ContentStream),
             other => Err(ObservationDecodeError::InvalidRecordTag(other)),
         }
     }
@@ -67,6 +177,9 @@ pub struct DirectoryObservation {
     pub creation_time_utc_ms: u64,
     pub last_write_time_utc_ms: u64,
     pub last_access_time_utc_ms: u64,
+    pub object_id: Option<ObjectIdentity>,
+    pub allocated_size: Option<u64>,
+    pub total_link_count: ValueKnowledge<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +194,8 @@ pub struct FileObservation {
     pub creation_time_utc_ms: u64,
     pub last_write_time_utc_ms: u64,
     pub last_access_time_utc_ms: u64,
+    pub object_id: Option<ObjectIdentity>,
+    pub total_link_count: ValueKnowledge<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,6 +208,7 @@ pub struct SpecialObservation {
     pub creation_time_utc_ms: u64,
     pub last_write_time_utc_ms: u64,
     pub last_access_time_utc_ms: u64,
+    pub object_id: Option<ObjectIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +216,18 @@ pub struct CoverageGapObservation {
     pub path: String,
     pub error_code: u32,
     pub error_message: String,
+}
+
+/// A secondary content stream (alternate data stream) owned by the filesystem
+/// object behind `parent_entry_id`. Streams are never directory entries; they
+/// only appear when an explicit analysis profile or enrichment enumerates
+/// them (ADR 0001: default scans leave them Not Observed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamObservation {
+    pub parent_entry_id: u32,
+    pub name: String,
+    pub logical_size: u64,
+    pub allocated_size: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +246,7 @@ pub enum ObservationRecord {
     Directory(DirectoryObservation),
     File(FileObservation),
     Special(SpecialObservation),
+    ContentStream(StreamObservation),
     CoverageGap(CoverageGapObservation),
     Terminal(TerminalObservation),
 }
@@ -130,6 +259,9 @@ pub enum ObservationDecodeError {
     InvalidRecordTag(u8),
     InvalidUtf8(Utf8Error),
     InvalidOutcome(u8),
+    InvalidValueKnowledgeTag(u8),
+    InvalidBooleanTag(u8),
+    InvalidExternalStatus(u8),
     Io(io::Error),
 }
 
@@ -157,6 +289,15 @@ impl fmt::Display for ObservationDecodeError {
             }
             ObservationDecodeError::InvalidOutcome(o) => {
                 write!(f, "invalid run outcome code: {o}")
+            }
+            ObservationDecodeError::InvalidValueKnowledgeTag(t) => {
+                write!(f, "invalid value knowledge tag: {t:#04x}")
+            }
+            ObservationDecodeError::InvalidBooleanTag(t) => {
+                write!(f, "invalid boolean flag tag: {t:#04x}")
+            }
+            ObservationDecodeError::InvalidExternalStatus(s) => {
+                write!(f, "invalid external reference status: {s:#04x}")
             }
             ObservationDecodeError::Io(e) => write!(f, "I/O error in observation stream: {e}"),
         }
@@ -215,6 +356,85 @@ fn read_u16_str<R: Read>(reader: &mut R) -> Result<String, ObservationDecodeErro
     String::from_utf8(buf).map_err(|e| ObservationDecodeError::InvalidUtf8(e.utf8_error()))
 }
 
+fn write_object_identity<W: Write>(writer: &mut W, oid: Option<&ObjectIdentity>) -> io::Result<()> {
+    match oid {
+        Some(id) => {
+            writer.write_all(&[1u8])?;
+            writer.write_all(&id.volume_guid)?;
+            writer.write_all(&id.file_id.to_le_bytes())?;
+        }
+        None => {
+            writer.write_all(&[0u8])?;
+        }
+    }
+    Ok(())
+}
+
+fn read_object_identity<R: Read>(
+    reader: &mut R,
+) -> Result<Option<ObjectIdentity>, ObservationDecodeError> {
+    let mut flag = [0u8; 1];
+    reader.read_exact(&mut flag)?;
+    match flag[0] {
+        0 => Ok(None),
+        1 => {
+            let mut guid = [0u8; 16];
+            reader.read_exact(&mut guid)?;
+            let mut file_id_buf = [0u8; 16];
+            reader.read_exact(&mut file_id_buf)?;
+            let file_id = u128::from_le_bytes(file_id_buf);
+            Ok(Some(ObjectIdentity {
+                volume_guid: guid,
+                file_id,
+            }))
+        }
+        other => Err(ObservationDecodeError::InvalidBooleanTag(other)),
+    }
+}
+
+fn write_link_knowledge<W: Write>(
+    writer: &mut W,
+    knowledge: &ValueKnowledge<u32>,
+) -> io::Result<()> {
+    match knowledge {
+        ValueKnowledge::NotObserved => {
+            writer.write_all(&[0u8])?;
+            writer.write_all(&0u32.to_le_bytes())?;
+        }
+        ValueKnowledge::Known(count) => {
+            writer.write_all(&[1u8])?;
+            writer.write_all(&count.to_le_bytes())?;
+        }
+        ValueKnowledge::Unavailable => {
+            writer.write_all(&[2u8])?;
+            writer.write_all(&0u32.to_le_bytes())?;
+        }
+        ValueKnowledge::NotApplicable => {
+            writer.write_all(&[3u8])?;
+            writer.write_all(&0u32.to_le_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+fn read_link_knowledge<R: Read>(
+    reader: &mut R,
+) -> Result<ValueKnowledge<u32>, ObservationDecodeError> {
+    let mut tag_buf = [0u8; 1];
+    reader.read_exact(&mut tag_buf)?;
+    let mut val_buf = [0u8; 4];
+    reader.read_exact(&mut val_buf)?;
+    let val = u32::from_le_bytes(val_buf);
+
+    match tag_buf[0] {
+        0 => Ok(ValueKnowledge::NotObserved),
+        1 => Ok(ValueKnowledge::Known(val)),
+        2 => Ok(ValueKnowledge::Unavailable),
+        3 => Ok(ValueKnowledge::NotApplicable),
+        other => Err(ObservationDecodeError::InvalidValueKnowledgeTag(other)),
+    }
+}
+
 /// Writer for encoding packed Little-Endian observation records to a stream.
 #[derive(Debug)]
 pub struct ObservationWriter<W: Write> {
@@ -242,6 +462,20 @@ impl<W: Write> ObservationWriter<W> {
             .write_all(&dir.last_write_time_utc_ms.to_le_bytes())?;
         self.writer
             .write_all(&dir.last_access_time_utc_ms.to_le_bytes())?;
+
+        match dir.allocated_size {
+            Some(alloc) => {
+                self.writer.write_all(&[1u8])?;
+                self.writer.write_all(&alloc.to_le_bytes())?;
+            }
+            None => {
+                self.writer.write_all(&[0u8])?;
+                self.writer.write_all(&0u64.to_le_bytes())?;
+            }
+        }
+
+        write_object_identity(&mut self.writer, dir.object_id.as_ref())?;
+        write_link_knowledge(&mut self.writer, &dir.total_link_count)?;
         write_u16_str(&mut self.writer, &dir.name)?;
         Ok(())
     }
@@ -271,6 +505,9 @@ impl<W: Write> ObservationWriter<W> {
             .write_all(&file.last_write_time_utc_ms.to_le_bytes())?;
         self.writer
             .write_all(&file.last_access_time_utc_ms.to_le_bytes())?;
+
+        write_object_identity(&mut self.writer, file.object_id.as_ref())?;
+        write_link_knowledge(&mut self.writer, &file.total_link_count)?;
         write_u16_str(&mut self.writer, &file.name)?;
         Ok(())
     }
@@ -288,7 +525,27 @@ impl<W: Write> ObservationWriter<W> {
             .write_all(&special.last_write_time_utc_ms.to_le_bytes())?;
         self.writer
             .write_all(&special.last_access_time_utc_ms.to_le_bytes())?;
+
+        write_object_identity(&mut self.writer, special.object_id.as_ref())?;
         write_u16_str(&mut self.writer, &special.name)?;
+        Ok(())
+    }
+
+    /// Writes a secondary content stream record. Streams only exist on v2+
+    /// streams and default scans never emit them (ADR 0001).
+    pub fn write_stream(&mut self, stream: &StreamObservation) -> Result<(), io::Error> {
+        self.writer.write_all(&[RecordTag::ContentStream as u8])?;
+        self.writer
+            .write_all(&stream.parent_entry_id.to_le_bytes())?;
+        self.writer.write_all(&stream.logical_size.to_le_bytes())?;
+        match stream.allocated_size {
+            Some(alloc) => {
+                self.writer.write_all(&[1u8])?;
+                self.writer.write_all(&alloc.to_le_bytes())?;
+            }
+            None => self.writer.write_all(&[0u8])?,
+        }
+        write_u16_str(&mut self.writer, &stream.name)?;
         Ok(())
     }
 
@@ -339,6 +596,7 @@ impl<W: Write> ObservationWriter<W> {
 pub struct ObservationReader<R: Read> {
     reader: R,
     target_path: String,
+    stream_version: u16,
 }
 
 impl<R: Read> ObservationReader<R> {
@@ -352,7 +610,7 @@ impl<R: Read> ObservationReader<R> {
         let mut ver_buf = [0u8; 2];
         reader.read_exact(&mut ver_buf)?;
         let version = u16::from_le_bytes(ver_buf);
-        if version != WORKER_STREAM_VERSION {
+        if version != WORKER_STREAM_VERSION_V1 && version != WORKER_STREAM_VERSION_V2 {
             return Err(ObservationDecodeError::UnsupportedVersion(version));
         }
 
@@ -361,11 +619,16 @@ impl<R: Read> ObservationReader<R> {
         Ok(Self {
             reader,
             target_path,
+            stream_version: version,
         })
     }
 
     pub fn target_path(&self) -> &str {
         &self.target_path
+    }
+
+    pub fn stream_version(&self) -> u16 {
+        self.stream_version
     }
 
     pub fn into_inner(self) -> R {
@@ -407,6 +670,26 @@ impl<R: Read> ObservationReader<R> {
                     u64::from_le_bytes(fixed_buf[24..32].try_into().unwrap());
                 let last_access_time_utc_ms =
                     u64::from_le_bytes(fixed_buf[32..40].try_into().unwrap());
+
+                let (allocated_size, object_id, total_link_count) =
+                    if self.stream_version == WORKER_STREAM_VERSION_V1 {
+                        (None, None, ValueKnowledge::NotObserved)
+                    } else {
+                        let mut alloc_flag = [0u8; 1];
+                        self.reader.read_exact(&mut alloc_flag)?;
+                        let mut raw_alloc = [0u8; 8];
+                        self.reader.read_exact(&mut raw_alloc)?;
+                        let alloc = match alloc_flag[0] {
+                            0 => None,
+                            1 => Some(u64::from_le_bytes(raw_alloc)),
+                            other => return Err(ObservationDecodeError::InvalidBooleanTag(other)),
+                        };
+
+                        let oid = read_object_identity(&mut self.reader)?;
+                        let links = read_link_knowledge(&mut self.reader)?;
+                        (alloc, oid, links)
+                    };
+
                 let name = read_u16_str(&mut self.reader)?;
 
                 Ok(Some(ObservationRecord::Directory(DirectoryObservation {
@@ -418,6 +701,9 @@ impl<R: Read> ObservationReader<R> {
                     creation_time_utc_ms,
                     last_write_time_utc_ms,
                     last_access_time_utc_ms,
+                    object_id,
+                    allocated_size,
+                    total_link_count,
                 })))
             }
             RecordTag::File => {
@@ -427,9 +713,13 @@ impl<R: Read> ObservationReader<R> {
                 let entry_id = u32::from_le_bytes(fixed_buf[0..4].try_into().unwrap());
                 let parent_id = u32::from_le_bytes(fixed_buf[4..8].try_into().unwrap());
                 let logical_size = u64::from_le_bytes(fixed_buf[8..16].try_into().unwrap());
-                let alloc_known = fixed_buf[16] != 0;
+                let alloc_flag = fixed_buf[16];
                 let raw_alloc = u64::from_le_bytes(fixed_buf[17..25].try_into().unwrap());
-                let allocated_size = if alloc_known { Some(raw_alloc) } else { None };
+                let allocated_size = match alloc_flag {
+                    0 => None,
+                    1 => Some(raw_alloc),
+                    other => return Err(ObservationDecodeError::InvalidBooleanTag(other)),
+                };
                 let file_attributes = u32::from_le_bytes(fixed_buf[25..29].try_into().unwrap());
                 let reparse_tag = u32::from_le_bytes(fixed_buf[29..33].try_into().unwrap());
                 let creation_time_utc_ms =
@@ -438,6 +728,16 @@ impl<R: Read> ObservationReader<R> {
                     u64::from_le_bytes(fixed_buf[41..49].try_into().unwrap());
                 let last_access_time_utc_ms =
                     u64::from_le_bytes(fixed_buf[49..57].try_into().unwrap());
+
+                let (object_id, total_link_count) =
+                    if self.stream_version == WORKER_STREAM_VERSION_V1 {
+                        (None, ValueKnowledge::NotObserved)
+                    } else {
+                        let oid = read_object_identity(&mut self.reader)?;
+                        let links = read_link_knowledge(&mut self.reader)?;
+                        (oid, links)
+                    };
+
                 let name = read_u16_str(&mut self.reader)?;
 
                 Ok(Some(ObservationRecord::File(FileObservation {
@@ -451,6 +751,8 @@ impl<R: Read> ObservationReader<R> {
                     creation_time_utc_ms,
                     last_write_time_utc_ms,
                     last_access_time_utc_ms,
+                    object_id,
+                    total_link_count,
                 })))
             }
             RecordTag::SpecialObject => {
@@ -467,6 +769,13 @@ impl<R: Read> ObservationReader<R> {
                     u64::from_le_bytes(fixed_buf[24..32].try_into().unwrap());
                 let last_access_time_utc_ms =
                     u64::from_le_bytes(fixed_buf[32..40].try_into().unwrap());
+
+                let object_id = if self.stream_version == WORKER_STREAM_VERSION_V1 {
+                    None
+                } else {
+                    read_object_identity(&mut self.reader)?
+                };
+
                 let name = read_u16_str(&mut self.reader)?;
 
                 Ok(Some(ObservationRecord::Special(SpecialObservation {
@@ -478,6 +787,7 @@ impl<R: Read> ObservationReader<R> {
                     creation_time_utc_ms,
                     last_write_time_utc_ms,
                     last_access_time_utc_ms,
+                    object_id,
                 })))
             }
             RecordTag::CoverageGap => {
@@ -494,6 +804,30 @@ impl<R: Read> ObservationReader<R> {
                         error_message,
                     },
                 )))
+            }
+            RecordTag::ContentStream => {
+                let mut fixed_buf = [0u8; 4 + 8 + 1];
+                self.reader.read_exact(&mut fixed_buf)?;
+
+                let parent_entry_id = u32::from_le_bytes(fixed_buf[0..4].try_into().unwrap());
+                let logical_size = u64::from_le_bytes(fixed_buf[4..12].try_into().unwrap());
+                let allocated_size = match fixed_buf[12] {
+                    0 => None,
+                    1 => {
+                        let mut raw = [0u8; 8];
+                        self.reader.read_exact(&mut raw)?;
+                        Some(u64::from_le_bytes(raw))
+                    }
+                    other => return Err(ObservationDecodeError::InvalidBooleanTag(other)),
+                };
+                let name = read_u16_str(&mut self.reader)?;
+
+                Ok(Some(ObservationRecord::ContentStream(StreamObservation {
+                    parent_entry_id,
+                    name,
+                    logical_size,
+                    allocated_size,
+                })))
             }
             RecordTag::Terminal => {
                 let mut fixed_buf = [0u8; 1 + 8 + 8 + 8 + 8 + 4 + 8];

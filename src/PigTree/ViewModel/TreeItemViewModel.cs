@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Windows.Input;
 using PigTree.Model;
@@ -16,11 +17,17 @@ public sealed class TreeItemViewModel : ViewModelBase
     public string Name { get; }
     public uint EntryKind { get; }
     public int Level { get; }
-    public ulong LogicalSize { get; }
-    public ulong AllocatedSize { get; }
+    public ulong LogicalBytes { get; }
+    public ulong ReferencedAllocatedBytes { get; }
     public bool AllocatedSizeKnown { get; }
     public uint ChildCount { get; }
     public bool HasChildren { get; }
+    public ulong UniqueAllocatedBytes { get; }
+    public uint ObservedAliasCount { get; }
+    public string TotalLinkCountStatus { get; }
+    public uint? TotalLinkCountValue { get; }
+    public string ExternalReferenceStatus { get; }
+    public ulong KnownSubtotalAllocatedBytes { get; }
     public string ScopeCoverage { get; }
     public uint CoverageGaps { get; }
 
@@ -57,12 +64,54 @@ public sealed class TreeItemViewModel : ViewModelBase
         set => SetProperty(ref _isFocused, value);
     }
 
-    public string FormattedLogicalSize => CoalescedProgressState.FormatBytes(LogicalSize);
-    public string FormattedAllocatedSize => AllocatedSizeKnown ? CoalescedProgressState.FormatBytes(AllocatedSize) : "-";
+    public string FormattedLogicalSize => CoalescedProgressState.FormatBytes(LogicalBytes);
+
+    public string FormattedReferencedAllocated => AllocatedSizeKnown
+        ? CoalescedProgressState.FormatBytes(ReferencedAllocatedBytes)
+        : "-";
+
+    public string FormattedUniqueAllocated => AllocatedSizeKnown
+        ? CoalescedProgressState.FormatBytes(UniqueAllocatedBytes)
+        : "-";
+
     public string FormattedItemCount => IsDirectory ? ChildCount.ToString("N0") : "-";
     public double IndentMargin => Level * 16.0;
 
-    public string AutomationName => $"{Name}, {FormattedLogicalSize}, {(IsDirectory ? $"{ChildCount} items" : "file")}";
+    /// <summary>
+    /// True when at least two directory entries refer to the same underlying object
+    /// (issue #20 hard link aliases).
+    /// </summary>
+    public bool HasAliasBadge => ObservedAliasCount >= 2;
+
+    /// <summary>Empty when no alias badge should be shown; otherwise e.g. "×2 aliases".</summary>
+    public string AliasBadgeText => HasAliasBadge ? $"×{ObservedAliasCount} aliases" : string.Empty;
+
+    /// <summary>
+    /// True only when external reference evidence is confirmed external (issue #20);
+    /// indeterminate evidence is never badged per row.
+    /// </summary>
+    public bool HasExternalLinkBadge => string.Equals(ExternalReferenceStatus, ExternalReference.ConfirmedExternal, StringComparison.Ordinal);
+
+    /// <summary>Empty when no external link indicator should be shown.</summary>
+    public string ExternalLinkBadgeText => HasExternalLinkBadge ? "external link" : string.Empty;
+
+    public string AutomationName
+    {
+        get
+        {
+            string automationName =
+                $"{Name}, {FormattedLogicalSize}, {FormattedReferencedAllocated}, {(IsDirectory ? $"{ChildCount} items" : "file")}";
+            if (HasAliasBadge)
+            {
+                automationName += $", {ObservedAliasCount} aliases";
+            }
+            if (HasExternalLinkBadge)
+            {
+                automationName += ", external link";
+            }
+            return automationName;
+        }
+    }
 
     public TreeItemViewModel(TreeNodeData data, int level, TreeItemViewModel? parentItem = null)
     {
@@ -71,11 +120,17 @@ public sealed class TreeItemViewModel : ViewModelBase
         Name = data.Name;
         EntryKind = data.EntryKind;
         Level = level;
-        LogicalSize = data.LogicalSize;
-        AllocatedSize = data.AllocatedSize;
+        LogicalBytes = data.LogicalBytes;
+        ReferencedAllocatedBytes = data.ReferencedAllocatedBytes;
         AllocatedSizeKnown = data.AllocatedSizeKnown;
         ChildCount = data.ChildCount;
         HasChildren = data.HasChildren;
+        UniqueAllocatedBytes = data.UniqueAllocatedBytes;
+        ObservedAliasCount = data.ObservedAliasCount;
+        TotalLinkCountStatus = data.TotalLinkCountStatus;
+        TotalLinkCountValue = data.TotalLinkCountValue;
+        ExternalReferenceStatus = data.ExternalReferenceStatus;
+        KnownSubtotalAllocatedBytes = data.KnownSubtotalAllocatedBytes;
         ScopeCoverage = data.ScopeCoverage;
         CoverageGaps = data.CoverageGaps;
         ParentItem = parentItem;
