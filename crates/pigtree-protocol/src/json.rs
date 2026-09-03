@@ -296,9 +296,10 @@ pub fn format_directory_entry_json(node: &DirectoryEntryNode) -> String {
     let entry_kind_str = entry_kind_to_str(node.entry_kind);
     let ext_status_str = external_reference_status_to_str(node.external_reference_status);
     let link_json = format_link_count_knowledge(node.total_link_count.as_ref());
+    let streams_json = format_content_streams(node);
 
     format!(
-        r#"{{"schema_version":"1.0","id":{},"parent_id":{},"name":{},"entry_kind":{},"logical_bytes":{},"referenced_allocated_bytes":{},"unique_allocated_bytes":{},"allocated_size_known":{},"known_subtotal_allocated_bytes":{},"child_count":{},"has_children":{},"observed_alias_count":{},"total_link_count":{},"external_reference_status":{}}}"#,
+        r#"{{"schema_version":"1.0","id":{},"parent_id":{},"name":{},"entry_kind":{},"logical_bytes":{},"referenced_allocated_bytes":{},"unique_allocated_bytes":{},"allocated_size_known":{},"known_subtotal_allocated_bytes":{},"child_count":{},"has_children":{},"observed_alias_count":{},"total_link_count":{},"external_reference_status":{}{}}}"#,
         node.id,
         node.parent_id,
         escape_json_string(&node.name),
@@ -312,8 +313,31 @@ pub fn format_directory_entry_json(node: &DirectoryEntryNode) -> String {
         node.has_children,
         node.observed_alias_count,
         link_json,
-        escape_json_string(ext_status_str)
+        escape_json_string(ext_status_str),
+        streams_json
     )
+}
+
+/// Renders the optional content stream breakdown of an entry's owning object.
+/// The field is omitted entirely unless a profile or enrichment observed streams.
+fn format_content_streams(node: &DirectoryEntryNode) -> String {
+    if node.content_streams.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<String> = node
+        .content_streams
+        .iter()
+        .map(|s| {
+            format!(
+                r#"{{"name":{},"logical_bytes":{},"allocated_bytes":{},"allocated_size_known":{}}}"#,
+                escape_json_string(&s.name),
+                s.logical_bytes,
+                s.allocated_bytes,
+                s.allocated_size_known
+            )
+        })
+        .collect();
+    format!(r#","content_streams":[{}]"#, parts.join(","))
 }
 
 /// Formats a DirectoryEntryNode as a single-line NDJSON record.
@@ -748,6 +772,7 @@ mod tests {
             external_reference_status:
                 ExternalReferenceStatusProto::ExternalReferenceStatusConfirmedNone as i32,
             known_subtotal_allocated_bytes: 2097152,
+            content_streams: Vec::new(),
         };
 
         let json_known = format_directory_entry_json(&node_known);
@@ -789,6 +814,7 @@ mod tests {
             external_reference_status:
                 ExternalReferenceStatusProto::ExternalReferenceStatusIndeterminate as i32,
             known_subtotal_allocated_bytes: 0,
+            content_streams: Vec::new(),
         };
 
         let json_not_obs = format_directory_entry_json(&node_not_obs);
@@ -818,6 +844,7 @@ mod tests {
             external_reference_status:
                 ExternalReferenceStatusProto::ExternalReferenceStatusInconsistentEvidence as i32,
             known_subtotal_allocated_bytes: 512,
+            content_streams: Vec::new(),
         };
 
         let json_unavail = format_directory_entry_json(&node_unavail);
@@ -847,6 +874,7 @@ mod tests {
             external_reference_status:
                 ExternalReferenceStatusProto::ExternalReferenceStatusNotApplicable as i32,
             known_subtotal_allocated_bytes: 8192,
+            content_streams: Vec::new(),
         };
 
         let json_not_app = format_directory_entry_json(&node_not_app);
@@ -875,6 +903,7 @@ mod tests {
             external_reference_status:
                 ExternalReferenceStatusProto::ExternalReferenceStatusConfirmedExternal as i32,
             known_subtotal_allocated_bytes: 8192,
+            content_streams: Vec::new(),
         };
 
         let json_ext = format_directory_entry_json(&node_ext);
@@ -900,6 +929,7 @@ mod tests {
             external_reference_status:
                 ExternalReferenceStatusProto::ExternalReferenceStatusUnspecified as i32,
             known_subtotal_allocated_bytes: 0,
+            content_streams: Vec::new(),
         };
 
         let json_unspecified = format_directory_entry_json(&node_unspecified);
@@ -923,6 +953,7 @@ mod tests {
             total_link_count: None,
             external_reference_status: 99, // Unknown numeric value
             known_subtotal_allocated_bytes: 512,
+            content_streams: Vec::new(),
         };
 
         let json_unknown = format_directory_entry_json(&node_unknown);
@@ -955,6 +986,7 @@ mod tests {
             }),
             external_reference_status: 1,
             known_subtotal_allocated_bytes: 4096,
+            content_streams: Vec::new(),
         };
 
         // Standalone JSON
@@ -985,5 +1017,51 @@ mod tests {
         assert!(event.contains(r#""channel":"data""#));
         assert!(event.contains(r#""provenance":"win32_directory_traversal""#));
         assert!(event.contains(r#""payload":{"schema_version":"1.0","id":99,"parent_id":10"#));
+    }
+
+    #[test]
+    fn test_format_directory_entry_content_streams_breakdown() {
+        use crate::protobuf::{ContentStreamProto, DirectoryEntryNode};
+
+        let mut node = DirectoryEntryNode {
+            id: 5,
+            parent_id: 1,
+            name: "host.dat".to_string(),
+            entry_kind: 2,
+            logical_bytes: 100,
+            referenced_allocated_bytes: 4096,
+            allocated_size_known: true,
+            child_count: 0,
+            has_children: false,
+            unique_allocated_bytes: 4096,
+            observed_alias_count: 1,
+            total_link_count: None,
+            external_reference_status: 0,
+            known_subtotal_allocated_bytes: 4096,
+            content_streams: Vec::new(),
+        };
+
+        // Un-enriched scans omit the field entirely so output stays stable.
+        let json_without = format_directory_entry_json(&node);
+        assert!(!json_without.contains("content_streams"));
+
+        node.content_streams.push(ContentStreamProto {
+            name: "zone.identifier".to_string(),
+            logical_bytes: 42,
+            allocated_bytes: 512,
+            allocated_size_known: true,
+        });
+        node.content_streams.push(ContentStreamProto {
+            name: "cache".to_string(),
+            logical_bytes: 4096,
+            allocated_bytes: 0,
+            allocated_size_known: false,
+        });
+
+        let json_with = format_directory_entry_json(&node);
+        assert!(json_with.contains(
+            r#""content_streams":[{"name":"zone.identifier","logical_bytes":42,"allocated_bytes":512,"allocated_size_known":true},{"name":"cache","logical_bytes":4096,"allocated_bytes":0,"allocated_size_known":false}]"#
+        ));
+        assert!(format_directory_entry_ndjson(&node) == json_with);
     }
 }

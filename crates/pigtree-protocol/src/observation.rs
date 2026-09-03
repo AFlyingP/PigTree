@@ -123,6 +123,7 @@ pub enum RecordTag {
     SpecialObject = 0x03,
     CoverageGap = 0x04,
     Terminal = 0x05,
+    ContentStream = 0x06,
 }
 
 impl RecordTag {
@@ -133,6 +134,7 @@ impl RecordTag {
             0x03 => Ok(RecordTag::SpecialObject),
             0x04 => Ok(RecordTag::CoverageGap),
             0x05 => Ok(RecordTag::Terminal),
+            0x06 => Ok(RecordTag::ContentStream),
             other => Err(ObservationDecodeError::InvalidRecordTag(other)),
         }
     }
@@ -216,6 +218,18 @@ pub struct CoverageGapObservation {
     pub error_message: String,
 }
 
+/// A secondary content stream (alternate data stream) owned by the filesystem
+/// object behind `parent_entry_id`. Streams are never directory entries; they
+/// only appear when an explicit analysis profile or enrichment enumerates
+/// them (ADR 0001: default scans leave them Not Observed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamObservation {
+    pub parent_entry_id: u32,
+    pub name: String,
+    pub logical_size: u64,
+    pub allocated_size: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalObservation {
     pub outcome: RunOutcome,
@@ -232,6 +246,7 @@ pub enum ObservationRecord {
     Directory(DirectoryObservation),
     File(FileObservation),
     Special(SpecialObservation),
+    ContentStream(StreamObservation),
     CoverageGap(CoverageGapObservation),
     Terminal(TerminalObservation),
 }
@@ -516,6 +531,24 @@ impl<W: Write> ObservationWriter<W> {
         Ok(())
     }
 
+    /// Writes a secondary content stream record. Streams only exist on v2+
+    /// streams and default scans never emit them (ADR 0001).
+    pub fn write_stream(&mut self, stream: &StreamObservation) -> Result<(), io::Error> {
+        self.writer.write_all(&[RecordTag::ContentStream as u8])?;
+        self.writer
+            .write_all(&stream.parent_entry_id.to_le_bytes())?;
+        self.writer.write_all(&stream.logical_size.to_le_bytes())?;
+        match stream.allocated_size {
+            Some(alloc) => {
+                self.writer.write_all(&[1u8])?;
+                self.writer.write_all(&alloc.to_le_bytes())?;
+            }
+            None => self.writer.write_all(&[0u8])?,
+        }
+        write_u16_str(&mut self.writer, &stream.name)?;
+        Ok(())
+    }
+
     pub fn write_coverage_gap(&mut self, gap: &CoverageGapObservation) -> Result<(), io::Error> {
         self.writer.write_all(&[RecordTag::CoverageGap as u8])?;
         self.writer.write_all(&gap.error_code.to_le_bytes())?;
@@ -771,6 +804,30 @@ impl<R: Read> ObservationReader<R> {
                         error_message,
                     },
                 )))
+            }
+            RecordTag::ContentStream => {
+                let mut fixed_buf = [0u8; 4 + 8 + 1];
+                self.reader.read_exact(&mut fixed_buf)?;
+
+                let parent_entry_id = u32::from_le_bytes(fixed_buf[0..4].try_into().unwrap());
+                let logical_size = u64::from_le_bytes(fixed_buf[4..12].try_into().unwrap());
+                let allocated_size = match fixed_buf[12] {
+                    0 => None,
+                    1 => {
+                        let mut raw = [0u8; 8];
+                        self.reader.read_exact(&mut raw)?;
+                        Some(u64::from_le_bytes(raw))
+                    }
+                    other => return Err(ObservationDecodeError::InvalidBooleanTag(other)),
+                };
+                let name = read_u16_str(&mut self.reader)?;
+
+                Ok(Some(ObservationRecord::ContentStream(StreamObservation {
+                    parent_entry_id,
+                    name,
+                    logical_size,
+                    allocated_size,
+                })))
             }
             RecordTag::Terminal => {
                 let mut fixed_buf = [0u8; 1 + 8 + 8 + 8 + 8 + 4 + 8];

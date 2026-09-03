@@ -22,9 +22,9 @@ pub use json::{
 pub use observation::{
     CoverageGapObservation, DirectoryObservation, ExternalReferenceStatus, FileObservation,
     ObjectIdentity, ObservationDecodeError, ObservationReader, ObservationRecord,
-    ObservationWriter, RecordTag, RunOutcome, SpecialObservation, TerminalObservation,
-    TotalLinkCount, ValueKnowledge, WORKER_MAGIC, WORKER_STREAM_VERSION, WORKER_STREAM_VERSION_V1,
-    WORKER_STREAM_VERSION_V2,
+    ObservationWriter, RecordTag, RunOutcome, SpecialObservation, StreamObservation,
+    TerminalObservation, TotalLinkCount, ValueKnowledge, WORKER_MAGIC, WORKER_STREAM_VERSION,
+    WORKER_STREAM_VERSION_V1, WORKER_STREAM_VERSION_V2,
 };
 pub use prost::Message;
 pub use protobuf::*;

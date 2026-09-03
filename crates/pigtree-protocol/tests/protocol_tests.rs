@@ -660,6 +660,7 @@ fn test_get_children_request_and_response_roundtrip() {
                         total_link_count: None,
                         external_reference_status: 0,
                         known_subtotal_allocated_bytes: 0,
+                        content_streams: Vec::new(),
                     },
                     DirectoryEntryNode {
                         id: 3,
@@ -676,6 +677,7 @@ fn test_get_children_request_and_response_roundtrip() {
                         total_link_count: None,
                         external_reference_status: 0,
                         known_subtotal_allocated_bytes: 4096,
+                        content_streams: Vec::new(),
                     },
                 ],
             },
@@ -725,6 +727,7 @@ fn test_get_children_response_at_max_limit_encoded_size_under_max_payload() {
             total_link_count: None,
             external_reference_status: 0,
             known_subtotal_allocated_bytes: 4096 * i as u64,
+            content_streams: Vec::new(),
         });
     }
 

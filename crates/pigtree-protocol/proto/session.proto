@@ -118,6 +118,16 @@ enum ExternalReferenceStatusProto {
   EXTERNAL_REFERENCE_STATUS_NOT_APPLICABLE = 5;
 }
 
+// Secondary content stream (ADS) belonging to the object behind a directory
+// entry. Only populated by explicit profiles/enrichments; default scans leave
+// it empty per ADR 0001.
+message ContentStreamProto {
+  string name = 1;
+  uint64 logical_bytes = 2;
+  uint64 allocated_bytes = 3;
+  bool allocated_size_known = 4;
+}
+
 enum LinkCountKnowledgeStatus {
   LINK_COUNT_KNOWLEDGE_STATUS_UNSPECIFIED = 0;
   LINK_COUNT_KNOWLEDGE_STATUS_KNOWN = 1;
@@ -174,6 +184,7 @@ message DirectoryEntryNode {
   LinkCountKnowledgeProto total_link_count = 14;
   ExternalReferenceStatusProto external_reference_status = 15;
   uint64 known_subtotal_allocated_bytes = 16;
+  repeated ContentStreamProto content_streams = 17;
 }
 
 message GetChildrenRequest {

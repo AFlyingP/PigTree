@@ -966,3 +966,60 @@ fn test_v1_stream_backward_compatibility() {
 
     assert!(reader.read_record().unwrap().is_none());
 }
+
+#[test]
+fn test_stream_observation_roundtrip() {
+    let mut buf = Vec::new();
+    let streams = vec![
+        StreamObservation {
+            parent_entry_id: 7,
+            name: "zone.identifier".to_string(),
+            logical_size: 42,
+            allocated_size: Some(512),
+        },
+        StreamObservation {
+            parent_entry_id: 7,
+            name: "notes".to_string(),
+            logical_size: 1024,
+            allocated_size: None,
+        },
+    ];
+
+    {
+        let mut writer = ObservationWriter::new(&mut buf, r"C:\Target").expect("writer");
+        for s in &streams {
+            writer.write_stream(s).expect("write stream");
+        }
+        writer.flush().expect("flush");
+    }
+
+    let mut cursor = Cursor::new(buf);
+    let mut reader = ObservationReader::new(&mut cursor).expect("reader");
+
+    for expected in &streams {
+        match reader.read_record().expect("read").expect("record") {
+            ObservationRecord::ContentStream(s) => assert_eq!(&s, expected),
+            other => panic!("expected ContentStream, got {:?}", other),
+        }
+    }
+    assert!(reader.read_record().expect("read").is_none());
+}
+
+#[test]
+fn test_stream_observation_truncated_record_fails_closed() {
+    // A truncated stream record (alloc flag claims a payload that isn't there)
+    // must surface a decode error, never a silently wrong observation.
+    let mut buf = Vec::new();
+    {
+        let writer = ObservationWriter::new(&mut buf, r"C:\Target").expect("writer");
+        drop(writer);
+    }
+    buf.extend_from_slice(&[RecordTag::ContentStream as u8]);
+    buf.extend_from_slice(&1u32.to_le_bytes());
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    buf.push(1u8); // flag says an allocated size follows, but the stream ends
+
+    let mut cursor = Cursor::new(buf);
+    let mut reader = ObservationReader::new(&mut cursor).expect("reader");
+    assert!(reader.read_record().is_err());
+}
