@@ -26,6 +26,9 @@ fn test_directory_observation_roundtrip() {
         creation_time_utc_ms: 1700000000000,
         last_write_time_utc_ms: 1700000001000,
         last_access_time_utc_ms: 1700000002000,
+        object_id: None,
+        allocated_size: None,
+        total_link_count: ValueKnowledge::NotObserved,
     };
 
     {
@@ -67,6 +70,8 @@ fn test_file_observation_known_and_unavailable_allocated_size() {
         creation_time_utc_ms: 1700000000000,
         last_write_time_utc_ms: 1700000001000,
         last_access_time_utc_ms: 1700000002000,
+        object_id: None,
+        total_link_count: ValueKnowledge::NotObserved,
     };
 
     let file_unavail = FileObservation {
@@ -80,6 +85,8 @@ fn test_file_observation_known_and_unavailable_allocated_size() {
         creation_time_utc_ms: 1700000003000,
         last_write_time_utc_ms: 1700000004000,
         last_access_time_utc_ms: 1700000005000,
+        object_id: None,
+        total_link_count: ValueKnowledge::NotObserved,
     };
 
     {
@@ -127,6 +134,7 @@ fn test_special_observation_roundtrip() {
         creation_time_utc_ms: 1700000010000,
         last_write_time_utc_ms: 1700000020000,
         last_access_time_utc_ms: 1700000030000,
+        object_id: None,
     };
 
     {
@@ -262,6 +270,9 @@ fn test_mixed_stream_full_lifecycle() {
         creation_time_utc_ms: 1000,
         last_write_time_utc_ms: 2000,
         last_access_time_utc_ms: 3000,
+        object_id: None,
+        allocated_size: None,
+        total_link_count: ValueKnowledge::NotObserved,
     };
     let file1 = FileObservation {
         entry_id: 2,
@@ -274,6 +285,8 @@ fn test_mixed_stream_full_lifecycle() {
         creation_time_utc_ms: 1100,
         last_write_time_utc_ms: 2100,
         last_access_time_utc_ms: 3100,
+        object_id: None,
+        total_link_count: ValueKnowledge::NotObserved,
     };
     let file2 = FileObservation {
         entry_id: 3,
@@ -286,6 +299,8 @@ fn test_mixed_stream_full_lifecycle() {
         creation_time_utc_ms: 1200,
         last_write_time_utc_ms: 2200,
         last_access_time_utc_ms: 3200,
+        object_id: None,
+        total_link_count: ValueKnowledge::NotObserved,
     };
     let special = SpecialObservation {
         entry_id: 4,
@@ -296,6 +311,7 @@ fn test_mixed_stream_full_lifecycle() {
         creation_time_utc_ms: 1300,
         last_write_time_utc_ms: 2300,
         last_access_time_utc_ms: 3300,
+        object_id: None,
     };
     let gap = CoverageGapObservation {
         path: "C:\\Target\\Locked".to_string(),
@@ -463,6 +479,9 @@ fn test_fail_closed_on_invalid_utf8_in_header_and_records() {
         creation_time_utc_ms: 100,
         last_write_time_utc_ms: 200,
         last_access_time_utc_ms: 300,
+        object_id: None,
+        allocated_size: None,
+        total_link_count: ValueKnowledge::NotObserved,
     };
     {
         let mut writer = ObservationWriter::new(&mut buf2, "C:\\Target").unwrap();
@@ -527,6 +546,9 @@ fn test_fail_closed_on_premature_eof_and_truncations() {
         creation_time_utc_ms: 100,
         last_write_time_utc_ms: 200,
         last_access_time_utc_ms: 300,
+        object_id: None,
+        allocated_size: None,
+        total_link_count: ValueKnowledge::NotObserved,
     };
     {
         let mut writer = ObservationWriter::new(&mut buf_rec, "C:\\Target").unwrap();
@@ -566,6 +588,9 @@ fn test_oversized_string_rejection() {
         creation_time_utc_ms: 0,
         last_write_time_utc_ms: 0,
         last_access_time_utc_ms: 0,
+        object_id: None,
+        allocated_size: None,
+        total_link_count: ValueKnowledge::NotObserved,
     };
     let dir_err = writer.write_directory(&oversized_dir).unwrap_err();
     assert_eq!(dir_err.kind(), ErrorKind::InvalidInput);
@@ -582,6 +607,8 @@ fn test_oversized_string_rejection() {
         creation_time_utc_ms: 0,
         last_write_time_utc_ms: 0,
         last_access_time_utc_ms: 0,
+        object_id: None,
+        total_link_count: ValueKnowledge::NotObserved,
     };
     let file_err = writer.write_file(&oversized_file).unwrap_err();
     assert_eq!(file_err.kind(), ErrorKind::InvalidInput);
@@ -596,6 +623,7 @@ fn test_oversized_string_rejection() {
         creation_time_utc_ms: 0,
         last_write_time_utc_ms: 0,
         last_access_time_utc_ms: 0,
+        object_id: None,
     };
     let spec_err = writer.write_special(&oversized_special).unwrap_err();
     assert_eq!(spec_err.kind(), ErrorKind::InvalidInput);
@@ -616,4 +644,325 @@ fn test_oversized_string_rejection() {
     };
     let gap_msg_err = writer.write_coverage_gap(&oversized_gap_msg).unwrap_err();
     assert_eq!(gap_msg_err.kind(), ErrorKind::InvalidInput);
+}
+
+#[test]
+fn test_v2_object_identity_and_knowledge_roundtrip() {
+    let mut buf = Vec::new();
+    let dir_oid = ObjectIdentity::new(
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        0x1122_3344_5566_7788_99aa_bbcc_ddee_ff00_u128,
+    );
+    let dir = DirectoryObservation {
+        entry_id: 1,
+        parent_id: 0,
+        name: "test_dir".to_string(),
+        file_attributes: 0x10,
+        reparse_tag: 0,
+        creation_time_utc_ms: 1000,
+        last_write_time_utc_ms: 2000,
+        last_access_time_utc_ms: 3000,
+        object_id: Some(dir_oid),
+        allocated_size: Some(8192),
+        total_link_count: ValueKnowledge::Known(4),
+    };
+
+    let file1_oid = ObjectIdentity::new(
+        [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+        0xfedc_ba98_7654_3210_0123_4567_89ab_cdef_u128,
+    );
+    let file1 = FileObservation {
+        entry_id: 2,
+        parent_id: 1,
+        name: "file1.txt".to_string(),
+        logical_size: 1048576,
+        allocated_size: Some(1052672),
+        file_attributes: 0x20,
+        reparse_tag: 0,
+        creation_time_utc_ms: 1100,
+        last_write_time_utc_ms: 2100,
+        last_access_time_utc_ms: 3100,
+        object_id: Some(file1_oid),
+        total_link_count: ValueKnowledge::Unavailable,
+    };
+
+    let file2 = FileObservation {
+        entry_id: 3,
+        parent_id: 1,
+        name: "file2.bin".to_string(),
+        logical_size: 4096,
+        allocated_size: None,
+        file_attributes: 0x20,
+        reparse_tag: 0,
+        creation_time_utc_ms: 1200,
+        last_write_time_utc_ms: 2200,
+        last_access_time_utc_ms: 3200,
+        object_id: None,
+        total_link_count: ValueKnowledge::NotApplicable,
+    };
+
+    let special_oid = ObjectIdentity::new([0xAA; 16], 0x1234_5678_9abc_def0_u128);
+    let special = SpecialObservation {
+        entry_id: 4,
+        parent_id: 1,
+        name: "device_symlink".to_string(),
+        file_attributes: 0x400,
+        reparse_tag: 0xA000000C,
+        creation_time_utc_ms: 1300,
+        last_write_time_utc_ms: 2300,
+        last_access_time_utc_ms: 3300,
+        object_id: Some(special_oid),
+    };
+
+    {
+        let mut writer = ObservationWriter::new(&mut buf, "C:\\Target").expect("writer");
+        writer.write_directory(&dir).expect("write dir");
+        writer.write_file(&file1).expect("write file1");
+        writer.write_file(&file2).expect("write file2");
+        writer.write_special(&special).expect("write special");
+        writer.flush().expect("flush");
+    }
+
+    let mut cursor = Cursor::new(buf);
+    let mut reader = ObservationReader::new(&mut cursor).expect("reader");
+    assert_eq!(reader.stream_version(), WORKER_STREAM_VERSION_V2);
+
+    let rec1 = reader.read_record().unwrap().unwrap();
+    match rec1 {
+        ObservationRecord::Directory(d) => assert_eq!(d, dir),
+        other => panic!("expected Directory, got {:?}", other),
+    }
+
+    let rec2 = reader.read_record().unwrap().unwrap();
+    match rec2 {
+        ObservationRecord::File(f) => assert_eq!(f, file1),
+        other => panic!("expected File 1, got {:?}", other),
+    }
+
+    let rec3 = reader.read_record().unwrap().unwrap();
+    match rec3 {
+        ObservationRecord::File(f) => assert_eq!(f, file2),
+        other => panic!("expected File 2, got {:?}", other),
+    }
+
+    let rec4 = reader.read_record().unwrap().unwrap();
+    match rec4 {
+        ObservationRecord::Special(s) => assert_eq!(s, special),
+        other => panic!("expected Special, got {:?}", other),
+    }
+
+    assert!(reader.read_record().unwrap().is_none());
+}
+
+#[test]
+fn test_v2_rejects_malformed_presence_and_knowledge_tags() {
+    // 1. Malformed object_id presence tag on File
+    let mut buf = Vec::new();
+    {
+        let _writer = ObservationWriter::new(&mut buf, "C:\\Target").unwrap();
+    }
+    // Append File record tag (2)
+    buf.push(RecordTag::File as u8);
+    // 57 bytes of fixed fields:
+    // entry_id(4), parent_id(4), logical_size(8), alloc_flag(1)=0, alloc(8)=0,
+    // attr(4), reparse(4), create(8), write(8), access(8)
+    buf.extend_from_slice(&1u32.to_le_bytes()); // entry_id
+    buf.extend_from_slice(&0u32.to_le_bytes()); // parent_id
+    buf.extend_from_slice(&100u64.to_le_bytes()); // logical_size
+    buf.push(0u8); // alloc flag = None
+    buf.extend_from_slice(&0u64.to_le_bytes()); // raw alloc
+    buf.extend_from_slice(&0x20u32.to_le_bytes()); // file_attributes
+    buf.extend_from_slice(&0u32.to_le_bytes()); // reparse_tag
+    buf.extend_from_slice(&0u64.to_le_bytes()); // create
+    buf.extend_from_slice(&0u64.to_le_bytes()); // write
+    buf.extend_from_slice(&0u64.to_le_bytes()); // access
+                                                // Now malformed object_id flag: 0x02
+    buf.push(0x02);
+
+    let mut cursor = Cursor::new(buf);
+    let mut reader = ObservationReader::new(&mut cursor).unwrap();
+    let err = reader.read_record().unwrap_err();
+    match err {
+        ObservationDecodeError::InvalidBooleanTag(tag) => assert_eq!(tag, 0x02),
+        other => panic!("expected InvalidBooleanTag, got {:?}", other),
+    }
+
+    // 2. Malformed total_link_count tag on File
+    let mut buf = Vec::new();
+    {
+        let _writer = ObservationWriter::new(&mut buf, "C:\\Target").unwrap();
+    }
+    buf.push(RecordTag::File as u8);
+    buf.extend_from_slice(&1u32.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    buf.extend_from_slice(&100u64.to_le_bytes());
+    buf.push(0u8); // alloc None
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    buf.extend_from_slice(&0x20u32.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    buf.push(0u8); // object_id = None
+                   // Malformed knowledge tag: 0x04
+    buf.push(0x04);
+    buf.extend_from_slice(&0u32.to_le_bytes());
+
+    let mut cursor = Cursor::new(buf);
+    let mut reader = ObservationReader::new(&mut cursor).unwrap();
+    let err = reader.read_record().unwrap_err();
+    match err {
+        ObservationDecodeError::InvalidValueKnowledgeTag(tag) => assert_eq!(tag, 0x04),
+        other => panic!("expected InvalidValueKnowledgeTag, got {:?}", other),
+    }
+
+    // 3. Malformed directory allocated_size flag
+    let mut buf = Vec::new();
+    {
+        let _writer = ObservationWriter::new(&mut buf, "C:\\Target").unwrap();
+    }
+    buf.push(RecordTag::Directory as u8);
+    // fixed_buf: 40 bytes
+    buf.extend_from_slice(&1u32.to_le_bytes()); // entry_id
+    buf.extend_from_slice(&0u32.to_le_bytes()); // parent_id
+    buf.extend_from_slice(&0x10u32.to_le_bytes()); // attr
+    buf.extend_from_slice(&0u32.to_le_bytes()); // reparse
+    buf.extend_from_slice(&0u64.to_le_bytes()); // create
+    buf.extend_from_slice(&0u64.to_le_bytes()); // write
+    buf.extend_from_slice(&0u64.to_le_bytes()); // access
+                                                // Malformed directory alloc flag: 0x05
+    buf.push(0x05);
+    buf.extend_from_slice(&0u64.to_le_bytes());
+
+    let mut cursor = Cursor::new(buf);
+    let mut reader = ObservationReader::new(&mut cursor).unwrap();
+    let err = reader.read_record().unwrap_err();
+    match err {
+        ObservationDecodeError::InvalidBooleanTag(tag) => assert_eq!(tag, 0x05),
+        other => panic!(
+            "expected InvalidBooleanTag for directory alloc, got {:?}",
+            other
+        ),
+    }
+
+    // 4. Malformed file allocated_size flag
+    let mut buf = Vec::new();
+    {
+        let _writer = ObservationWriter::new(&mut buf, "C:\\Target").unwrap();
+    }
+    buf.push(RecordTag::File as u8);
+    buf.extend_from_slice(&1u32.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    buf.extend_from_slice(&100u64.to_le_bytes());
+    // Malformed file alloc flag: 0xFF
+    buf.push(0xFF);
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    buf.extend_from_slice(&0x20u32.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    buf.extend_from_slice(&0u64.to_le_bytes());
+
+    let mut cursor = Cursor::new(buf);
+    let mut reader = ObservationReader::new(&mut cursor).unwrap();
+    let err = reader.read_record().unwrap_err();
+    match err {
+        ObservationDecodeError::InvalidBooleanTag(tag) => assert_eq!(tag, 0xFF),
+        other => panic!("expected InvalidBooleanTag for file alloc, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_v1_stream_backward_compatibility() {
+    let mut buf = Vec::new();
+    // V1 Header: "PTWO" + 0x0001
+    buf.extend_from_slice(&WORKER_MAGIC);
+    buf.extend_from_slice(&WORKER_STREAM_VERSION_V1.to_le_bytes());
+    let target = "C:\\Target";
+    buf.extend_from_slice(&(target.len() as u16).to_le_bytes());
+    buf.extend_from_slice(target.as_bytes());
+
+    // Directory in V1: tag(1) + 40 bytes fixed + name
+    buf.push(RecordTag::Directory as u8);
+    buf.extend_from_slice(&1u32.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    buf.extend_from_slice(&0x10u32.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    buf.extend_from_slice(&1000u64.to_le_bytes());
+    buf.extend_from_slice(&2000u64.to_le_bytes());
+    buf.extend_from_slice(&3000u64.to_le_bytes());
+    let dname = "v1_dir";
+    buf.extend_from_slice(&(dname.len() as u16).to_le_bytes());
+    buf.extend_from_slice(dname.as_bytes());
+
+    // File in V1: tag(2) + 57 bytes fixed + name
+    buf.push(RecordTag::File as u8);
+    buf.extend_from_slice(&2u32.to_le_bytes());
+    buf.extend_from_slice(&1u32.to_le_bytes());
+    buf.extend_from_slice(&512u64.to_le_bytes());
+    buf.push(1u8); // alloc_known = true
+    buf.extend_from_slice(&4096u64.to_le_bytes()); // allocated_size = 4096
+    buf.extend_from_slice(&0x20u32.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    buf.extend_from_slice(&1100u64.to_le_bytes());
+    buf.extend_from_slice(&2100u64.to_le_bytes());
+    buf.extend_from_slice(&3100u64.to_le_bytes());
+    let fname = "v1_file.txt";
+    buf.extend_from_slice(&(fname.len() as u16).to_le_bytes());
+    buf.extend_from_slice(fname.as_bytes());
+
+    // Special in V1: tag(3) + 40 bytes fixed + name
+    buf.push(RecordTag::SpecialObject as u8);
+    buf.extend_from_slice(&3u32.to_le_bytes());
+    buf.extend_from_slice(&1u32.to_le_bytes());
+    buf.extend_from_slice(&0x400u32.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    buf.extend_from_slice(&1200u64.to_le_bytes());
+    buf.extend_from_slice(&2200u64.to_le_bytes());
+    buf.extend_from_slice(&3200u64.to_le_bytes());
+    let sname = "v1_special";
+    buf.extend_from_slice(&(sname.len() as u16).to_le_bytes());
+    buf.extend_from_slice(sname.as_bytes());
+
+    let mut cursor = Cursor::new(buf);
+    let mut reader = ObservationReader::new(&mut cursor).expect("read v1 stream");
+    assert_eq!(reader.stream_version(), WORKER_STREAM_VERSION_V1);
+    assert_eq!(reader.target_path(), target);
+
+    let rec1 = reader.read_record().unwrap().unwrap();
+    match rec1 {
+        ObservationRecord::Directory(d) => {
+            assert_eq!(d.entry_id, 1);
+            assert_eq!(d.name, "v1_dir");
+            assert_eq!(d.allocated_size, None);
+            assert_eq!(d.object_id, None);
+            assert_eq!(d.total_link_count, ValueKnowledge::NotObserved);
+        }
+        other => panic!("expected Directory, got {:?}", other),
+    }
+
+    let rec2 = reader.read_record().unwrap().unwrap();
+    match rec2 {
+        ObservationRecord::File(f) => {
+            assert_eq!(f.entry_id, 2);
+            assert_eq!(f.name, "v1_file.txt");
+            assert_eq!(f.logical_size, 512);
+            assert_eq!(f.allocated_size, Some(4096));
+            assert_eq!(f.object_id, None);
+            assert_eq!(f.total_link_count, ValueKnowledge::NotObserved);
+        }
+        other => panic!("expected File, got {:?}", other),
+    }
+
+    let rec3 = reader.read_record().unwrap().unwrap();
+    match rec3 {
+        ObservationRecord::Special(s) => {
+            assert_eq!(s.entry_id, 3);
+            assert_eq!(s.name, "v1_special");
+            assert_eq!(s.object_id, None);
+        }
+        other => panic!("expected Special, got {:?}", other),
+    }
+
+    assert!(reader.read_record().unwrap().is_none());
 }

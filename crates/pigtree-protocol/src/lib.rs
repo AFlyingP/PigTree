@@ -13,14 +13,18 @@ pub use frame::{
     FrameHeader, FrameParseError, CRC_SIZE, HEADER_SIZE, MAGIC, MAX_PAYLOAD_SIZE, SCHEMA_VERSION,
 };
 pub use json::{
-    escape_json_string, format_cancelled_envelope, format_diagnostic, format_echo_response,
+    entry_kind_to_str, escape_json_string, external_reference_status_to_str,
+    format_cancelled_envelope, format_diagnostic, format_directory_entry_json,
+    format_directory_entry_ndjson, format_directory_entry_ndjson_event, format_echo_response,
     format_error_envelope, format_health_response, format_ping_response, format_status_response,
-    format_success_envelope, format_version_response,
+    format_success_envelope, format_version_response, link_count_knowledge_to_str,
 };
 pub use observation::{
-    CoverageGapObservation, DirectoryObservation, FileObservation, ObservationDecodeError,
-    ObservationReader, ObservationRecord, ObservationWriter, RecordTag, RunOutcome,
-    SpecialObservation, TerminalObservation, WORKER_MAGIC, WORKER_STREAM_VERSION,
+    CoverageGapObservation, DirectoryObservation, ExternalReferenceStatus, FileObservation,
+    ObjectIdentity, ObservationDecodeError, ObservationReader, ObservationRecord,
+    ObservationWriter, RecordTag, RunOutcome, SpecialObservation, TerminalObservation,
+    TotalLinkCount, ValueKnowledge, WORKER_MAGIC, WORKER_STREAM_VERSION, WORKER_STREAM_VERSION_V1,
+    WORKER_STREAM_VERSION_V2,
 };
 pub use prost::Message;
 pub use protobuf::*;

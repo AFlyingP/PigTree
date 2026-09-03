@@ -514,7 +514,7 @@ fn test_scan_progress_roundtrip() {
             observed_directories: 150,
             observed_files: 1200,
             observed_logical_bytes: 524288000,
-            observed_allocated_bytes: 536870912,
+            observed_referenced_allocated_bytes: 536870912,
             coverage_gaps: 2,
             current_phase: "discovering".to_string(),
             current_directory: r"C:DataTargetsub".to_string(),
@@ -532,7 +532,7 @@ fn test_scan_progress_roundtrip() {
             assert_eq!(p.observed_directories, 150);
             assert_eq!(p.observed_files, 1200);
             assert_eq!(p.observed_logical_bytes, 524288000);
-            assert_eq!(p.observed_allocated_bytes, 536870912);
+            assert_eq!(p.observed_referenced_allocated_bytes, 536870912);
             assert_eq!(p.coverage_gaps, 2);
             assert_eq!(p.current_phase, "discovering");
             assert_eq!(p.current_directory, r"C:DataTargetsub");
@@ -568,6 +568,10 @@ fn test_scan_response_roundtrip() {
                 error_message: "Access is denied".to_string(),
             }],
             duration_ms: 300000,
+            referenced_allocated_bytes: 10737418240,
+            unique_allocated_bytes: 10737418240,
+            known_subtotal_allocated_bytes: 10737418240,
+            indeterminate_external_reference_objects: 7,
         })),
     };
 
@@ -594,6 +598,10 @@ fn test_scan_response_roundtrip() {
             assert_eq!(r.coverage_gaps[0].native_error, 5);
             assert_eq!(r.coverage_gaps[0].error_message, "Access is denied");
             assert_eq!(r.duration_ms, 300000);
+            assert_eq!(r.referenced_allocated_bytes, 10737418240);
+            assert_eq!(r.unique_allocated_bytes, 10737418240);
+            assert_eq!(r.known_subtotal_allocated_bytes, 10737418240);
+            assert_eq!(r.indeterminate_external_reference_objects, 7);
         }
         other => panic!("expected ScanResponse variant, got {:?}", other),
     }
@@ -642,22 +650,32 @@ fn test_get_children_request_and_response_roundtrip() {
                         parent_id: 1,
                         name: "SubDir".to_string(),
                         entry_kind: 1,
-                        logical_size: 0,
-                        allocated_size: 0,
+                        logical_bytes: 0,
+                        referenced_allocated_bytes: 0,
                         allocated_size_known: true,
                         child_count: 5,
                         has_children: true,
+                        unique_allocated_bytes: 0,
+                        observed_alias_count: 1,
+                        total_link_count: None,
+                        external_reference_status: 0,
+                        known_subtotal_allocated_bytes: 0,
                     },
                     DirectoryEntryNode {
                         id: 3,
                         parent_id: 1,
                         name: "file.txt".to_string(),
                         entry_kind: 2,
-                        logical_size: 1024,
-                        allocated_size: 4096,
+                        logical_bytes: 1024,
+                        referenced_allocated_bytes: 4096,
                         allocated_size_known: true,
                         child_count: 0,
                         has_children: false,
+                        unique_allocated_bytes: 4096,
+                        observed_alias_count: 1,
+                        total_link_count: None,
+                        external_reference_status: 0,
+                        known_subtotal_allocated_bytes: 4096,
                     },
                 ],
             },
@@ -697,11 +715,16 @@ fn test_get_children_response_at_max_limit_encoded_size_under_max_payload() {
             parent_id: 1,
             name: format!("Very_Long_Directory_Or_File_Name_Entry_{}_Padding_With_Realistic_Windows_Characters.dat", i),
             entry_kind: if i % 2 == 0 { 1 } else { 2 },
-            logical_size: 1024 * i as u64,
-            allocated_size: 4096 * i as u64,
+            logical_bytes: 1024 * i as u64,
+            referenced_allocated_bytes: 4096 * i as u64,
             allocated_size_known: true,
             child_count: if i % 2 == 0 { 10 } else { 0 },
             has_children: i % 2 == 0,
+            unique_allocated_bytes: 4096 * i as u64,
+            observed_alias_count: 1,
+            total_link_count: None,
+            external_reference_status: 0,
+            known_subtotal_allocated_bytes: 4096 * i as u64,
         });
     }
 
@@ -757,6 +780,10 @@ fn test_scan_response_allocated_bytes_not_observed_roundtrip() {
             allocated_bytes_known: false,
             coverage_gaps: vec![],
             duration_ms: 60000,
+            referenced_allocated_bytes: 204800,
+            unique_allocated_bytes: 204800,
+            known_subtotal_allocated_bytes: 204800,
+            indeterminate_external_reference_objects: 0,
         })),
     };
 

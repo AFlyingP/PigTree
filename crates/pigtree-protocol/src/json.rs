@@ -1,8 +1,9 @@
 //! Structured JSON output formatting for CLI stdout envelopes and stderr diagnostics.
 
 use crate::protobuf::{
-    CoverageGapReport, EchoResponse, HealthResponse, PingResponse, ScanProgress, ScanResponse,
-    StatusResponse, VersionResponse,
+    CoverageGapReport, DirectoryEntryNode, EchoResponse, HealthResponse, LinkCountKnowledgeProto,
+    LinkCountKnowledgeStatus, PingResponse, ScanProgress, ScanResponse, StatusResponse,
+    VersionResponse,
 };
 
 /// Escapes a string for JSON output according to RFC 8259.
@@ -157,15 +158,11 @@ pub fn format_scan_terminal_json(resp: &ScanResponse) -> String {
     let outcome_str = scan_run_outcome_to_str(resp.run_outcome);
     let coverage_str = scope_coverage_to_str(resp.scope_coverage);
     let directory_entries = resp.directory_count + resp.file_count + resp.special_count;
-    let knowledge_str = if resp.allocated_bytes_known {
-        "known"
-    } else {
-        "not_observed"
-    };
+    let knowledge_str = allocation_knowledge_str(resp.allocated_bytes_known);
     let gaps_json = format_coverage_gaps_array(&resp.coverage_gaps);
 
     format!(
-        r#"{{"operation_id":{},"schema_version":"1.0","run_outcome":{},"observation_interval":{{"started_at":{},"completed_at":{}}},"scope_coverage":{},"directory_entries":{},"directories":{},"files":{},"special_objects":{},"referenced_logical_bytes":{},"unique_allocated_bytes":{{"value":{},"knowledge":{}}},"coverage_gaps":{}}}"#,
+        r#"{{"operation_id":{},"schema_version":"1.0","run_outcome":{},"observation_interval":{{"started_at":{},"completed_at":{}}},"scope_coverage":{},"directory_entries":{},"directories":{},"files":{},"special_objects":{},"logical_bytes":{},"referenced_allocated_bytes":{{"value":{},"knowledge":{}}},"unique_allocated_bytes":{{"value":{},"knowledge":{}}},"known_subtotal_allocated_bytes":{},"indeterminate_external_reference_objects":{},"coverage_gaps":{}}}"#,
         escape_json_string(&resp.operation_id),
         escape_json_string(outcome_str),
         escape_json_string(&resp.observation_started_iso),
@@ -176,16 +173,29 @@ pub fn format_scan_terminal_json(resp: &ScanResponse) -> String {
         resp.file_count,
         resp.special_count,
         resp.logical_bytes,
-        resp.allocated_bytes,
+        resp.referenced_allocated_bytes,
         escape_json_string(knowledge_str),
+        resp.unique_allocated_bytes,
+        escape_json_string(knowledge_str),
+        resp.known_subtotal_allocated_bytes,
+        resp.indeterminate_external_reference_objects,
         gaps_json
     )
+}
+
+/// Returns the canonical Value Knowledge string for an allocation aggregate flag.
+fn allocation_knowledge_str(known: bool) -> &'static str {
+    if known {
+        "known"
+    } else {
+        "not_observed"
+    }
 }
 
 /// Formats an in-flight ScanProgress update as a single-line NDJSON event envelope.
 pub fn format_scan_progress_ndjson_event(p: &ScanProgress) -> String {
     format!(
-        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"1.0","phase":{},"channel":"progress","provenance":"win32_directory_traversal","payload":{{"observed_directories":{},"observed_files":{},"observed_logical_bytes":{},"observed_allocated_bytes":{},"coverage_gaps":{},"current_directory":{}}}}}"#,
+        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"1.0","phase":{},"channel":"progress","provenance":"win32_directory_traversal","payload":{{"observed_directories":{},"observed_files":{},"observed_logical_bytes":{},"observed_referenced_allocated_bytes":{},"coverage_gaps":{},"current_directory":{}}}}}"#,
         escape_json_string(&p.operation_id),
         p.sequence_number,
         escape_json_string(&p.timestamp_iso),
@@ -193,7 +203,7 @@ pub fn format_scan_progress_ndjson_event(p: &ScanProgress) -> String {
         p.observed_directories,
         p.observed_files,
         p.observed_logical_bytes,
-        p.observed_allocated_bytes,
+        p.observed_referenced_allocated_bytes,
         p.coverage_gaps,
         escape_json_string(&p.current_directory)
     )
@@ -204,15 +214,11 @@ pub fn format_scan_terminal_ndjson_event(resp: &ScanResponse, sequence_number: u
     let outcome_str = scan_run_outcome_to_str(resp.run_outcome);
     let coverage_str = scope_coverage_to_str(resp.scope_coverage);
     let directory_entries = resp.directory_count + resp.file_count + resp.special_count;
-    let knowledge_str = if resp.allocated_bytes_known {
-        "known"
-    } else {
-        "not_observed"
-    };
+    let knowledge_str = allocation_knowledge_str(resp.allocated_bytes_known);
     let gaps_json = format_coverage_gaps_array(&resp.coverage_gaps);
 
     format!(
-        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"1.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{{"run_outcome":{},"observation_interval":{{"started_at":{},"completed_at":{}}},"scope_coverage":{},"directory_entries":{},"directories":{},"files":{},"special_objects":{},"referenced_logical_bytes":{},"unique_allocated_bytes":{{"value":{},"knowledge":{}}},"coverage_gaps":{}}}}}"#,
+        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"1.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{{"run_outcome":{},"observation_interval":{{"started_at":{},"completed_at":{}}},"scope_coverage":{},"directory_entries":{},"directories":{},"files":{},"special_objects":{},"logical_bytes":{},"referenced_allocated_bytes":{{"value":{},"knowledge":{}}},"unique_allocated_bytes":{{"value":{},"knowledge":{}}},"known_subtotal_allocated_bytes":{},"indeterminate_external_reference_objects":{},"coverage_gaps":{}}}}}"#,
         escape_json_string(&resp.operation_id),
         sequence_number,
         escape_json_string(&resp.observation_completed_iso),
@@ -225,9 +231,110 @@ pub fn format_scan_terminal_ndjson_event(resp: &ScanResponse, sequence_number: u
         resp.file_count,
         resp.special_count,
         resp.logical_bytes,
-        resp.allocated_bytes,
+        resp.referenced_allocated_bytes,
         escape_json_string(knowledge_str),
+        resp.unique_allocated_bytes,
+        escape_json_string(knowledge_str),
+        resp.known_subtotal_allocated_bytes,
+        resp.indeterminate_external_reference_objects,
         gaps_json
+    )
+}
+
+/// Converts an entry_kind integer (1=directory, 2=file, 3=special) to its lowercase string.
+pub fn entry_kind_to_str(kind: u32) -> &'static str {
+    match kind {
+        1 => "directory",
+        2 => "file",
+        3 => "special",
+        _ => "unknown",
+    }
+}
+
+/// Converts a LinkCountKnowledgeStatus protobuf enum integer to its canonical lowercase string.
+pub fn link_count_knowledge_to_str(status: i32) -> &'static str {
+    match status {
+        1 => "known",
+        2 => "not_observed",
+        3 => "unavailable",
+        4 => "not_applicable",
+        _ => "not_observed",
+    }
+}
+
+/// Converts an ExternalReferenceStatusProto protobuf enum integer to its canonical lowercase string.
+pub fn external_reference_status_to_str(status: i32) -> &'static str {
+    match status {
+        1 => "confirmed_none",
+        2 => "confirmed_external",
+        3 => "indeterminate",
+        4 => "inconsistent_evidence",
+        5 => "not_applicable",
+        _ => "indeterminate",
+    }
+}
+
+/// Formats a LinkCountKnowledgeProto into a typed JSON object representing four-state Value Knowledge.
+fn format_link_count_knowledge(proto: Option<&LinkCountKnowledgeProto>) -> String {
+    match proto {
+        Some(p) if p.status == LinkCountKnowledgeStatus::Known as i32 => {
+            format!(r#"{{"value":{},"knowledge":"known"}}"#, p.count)
+        }
+        Some(p) => {
+            let status_str = link_count_knowledge_to_str(p.status);
+            format!(
+                r#"{{"value":null,"knowledge":{}}}"#,
+                escape_json_string(status_str)
+            )
+        }
+        None => r#"{"value":null,"knowledge":"not_observed"}"#.to_string(),
+    }
+}
+
+/// Formats a DirectoryEntryNode into a canonical RFC 8259 JSON object at the protocol automation seam.
+pub fn format_directory_entry_json(node: &DirectoryEntryNode) -> String {
+    let entry_kind_str = entry_kind_to_str(node.entry_kind);
+    let ext_status_str = external_reference_status_to_str(node.external_reference_status);
+    let link_json = format_link_count_knowledge(node.total_link_count.as_ref());
+
+    format!(
+        r#"{{"schema_version":"1.0","id":{},"parent_id":{},"name":{},"entry_kind":{},"logical_bytes":{},"referenced_allocated_bytes":{},"unique_allocated_bytes":{},"allocated_size_known":{},"known_subtotal_allocated_bytes":{},"child_count":{},"has_children":{},"observed_alias_count":{},"total_link_count":{},"external_reference_status":{}}}"#,
+        node.id,
+        node.parent_id,
+        escape_json_string(&node.name),
+        escape_json_string(entry_kind_str),
+        node.logical_bytes,
+        node.referenced_allocated_bytes,
+        node.unique_allocated_bytes,
+        node.allocated_size_known,
+        node.known_subtotal_allocated_bytes,
+        node.child_count,
+        node.has_children,
+        node.observed_alias_count,
+        link_json,
+        escape_json_string(ext_status_str)
+    )
+}
+
+/// Formats a DirectoryEntryNode as a single-line NDJSON record.
+pub fn format_directory_entry_ndjson(node: &DirectoryEntryNode) -> String {
+    format_directory_entry_json(node)
+}
+
+/// Formats a DirectoryEntryNode as an enveloped NDJSON data event under the ADR 0003 specification.
+pub fn format_directory_entry_ndjson_event(
+    operation_id: &str,
+    sequence_number: u64,
+    timestamp_iso: &str,
+    node: &DirectoryEntryNode,
+) -> String {
+    let entry_json = format_directory_entry_json(node);
+    format!(
+        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"1.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{}}}"#,
+        escape_json_string(operation_id),
+        sequence_number,
+        escape_json_string(timestamp_iso),
+        entry_json
     )
 }
 
@@ -433,6 +540,10 @@ mod tests {
                 error_message: "Access is denied.".to_string(),
             }],
             duration_ms: 1500,
+            referenced_allocated_bytes: 2048,
+            unique_allocated_bytes: 1536,
+            known_subtotal_allocated_bytes: 2048,
+            indeterminate_external_reference_objects: 2,
         };
 
         let json_doc = format_scan_terminal_json(&resp);
@@ -444,8 +555,13 @@ mod tests {
         assert!(json_doc.contains(r#""directories":5"#));
         assert!(json_doc.contains(r#""files":10"#));
         assert!(json_doc.contains(r#""special_objects":1"#));
-        assert!(json_doc.contains(r#""referenced_logical_bytes":1024"#));
-        assert!(json_doc.contains(r#""unique_allocated_bytes":{"value":2048,"knowledge":"known"}"#));
+        assert!(json_doc.contains(r#""logical_bytes":1024"#));
+        assert!(
+            json_doc.contains(r#""referenced_allocated_bytes":{"value":2048,"knowledge":"known"}"#)
+        );
+        assert!(json_doc.contains(r#""unique_allocated_bytes":{"value":1536,"knowledge":"known"}"#));
+        assert!(json_doc.contains(r#""known_subtotal_allocated_bytes":2048"#));
+        assert!(json_doc.contains(r#""indeterminate_external_reference_objects":2"#));
         assert!(json_doc.contains(r#""observation_interval":{"started_at":"2026-08-29T10:00:00.000Z","completed_at":"2026-08-29T10:00:01.500Z"}"#));
         assert!(json_doc.contains(r##""path":"C:\\test\\inaccessible""##));
         assert!(json_doc.contains(r#""status":"ERROR_ACCESS_DENIED""#));
@@ -459,7 +575,7 @@ mod tests {
             observed_directories: 2,
             observed_files: 4,
             observed_logical_bytes: 512,
-            observed_allocated_bytes: 1024,
+            observed_referenced_allocated_bytes: 1024,
             coverage_gaps: 0,
             current_phase: "traversing".to_string(),
             current_directory: r#"C:	est	arget"#.to_string(),
@@ -469,6 +585,7 @@ mod tests {
         assert!(ndjson_prog.contains(r#""sequence_number":1"#));
         assert!(ndjson_prog.contains(r#""phase":"traversing""#));
         assert!(ndjson_prog.contains(r#""provenance":"win32_directory_traversal""#));
+        assert!(ndjson_prog.contains(r#""observed_referenced_allocated_bytes":1024"#));
         assert!(ndjson_prog.contains(r#""current_directory":"C:\test\target""#));
 
         let ndjson_term = format_scan_terminal_ndjson_event(&resp, 2);
@@ -477,6 +594,12 @@ mod tests {
         assert!(ndjson_term.contains(r#""phase":"finalizing""#));
         assert!(ndjson_term.contains(r#""provenance":"win32_directory_traversal""#));
         assert!(ndjson_term.contains(r#""directory_entries":16"#));
+        assert!(ndjson_term
+            .contains(r#""referenced_allocated_bytes":{"value":2048,"knowledge":"known"}"#));
+        assert!(
+            ndjson_term.contains(r#""unique_allocated_bytes":{"value":1536,"knowledge":"known"}"#)
+        );
+        assert!(ndjson_term.contains(r#""indeterminate_external_reference_objects":2"#));
     }
 
     #[test]
@@ -520,8 +643,14 @@ mod tests {
             allocated_bytes_known: true,
             coverage_gaps: vec![],
             duration_ms: 1000,
+            referenced_allocated_bytes: 4096,
+            unique_allocated_bytes: 4096,
+            known_subtotal_allocated_bytes: 4096,
+            indeterminate_external_reference_objects: 0,
         };
         let json_known = format_scan_terminal_json(&resp_known);
+        assert!(json_known
+            .contains(r#""referenced_allocated_bytes":{"value":4096,"knowledge":"known"}"#));
         assert!(
             json_known.contains(r#""unique_allocated_bytes":{"value":4096,"knowledge":"known"}"#)
         );
@@ -549,6 +678,10 @@ mod tests {
             allocated_bytes_known: true,
             coverage_gaps: vec![],
             duration_ms: 1000,
+            referenced_allocated_bytes: 0,
+            unique_allocated_bytes: 0,
+            known_subtotal_allocated_bytes: 0,
+            indeterminate_external_reference_objects: 0,
         };
         let json_zero = format_scan_terminal_json(&resp_known_zero);
         assert!(json_zero.contains(r#""unique_allocated_bytes":{"value":0,"knowledge":"known"}"#));
@@ -570,8 +703,14 @@ mod tests {
             allocated_bytes_known: false,
             coverage_gaps: vec![],
             duration_ms: 1000,
+            referenced_allocated_bytes: 2048,
+            unique_allocated_bytes: 2048,
+            known_subtotal_allocated_bytes: 2048,
+            indeterminate_external_reference_objects: 0,
         };
         let json_not_obs = format_scan_terminal_json(&resp_not_observed);
+        assert!(json_not_obs
+            .contains(r#""referenced_allocated_bytes":{"value":2048,"knowledge":"not_observed"}"#));
         assert!(json_not_obs
             .contains(r#""unique_allocated_bytes":{"value":2048,"knowledge":"not_observed"}"#));
         assert!(!json_not_obs.contains("unknown"));
@@ -580,5 +719,271 @@ mod tests {
         assert!(ndjson_not_obs
             .contains(r#""unique_allocated_bytes":{"value":2048,"knowledge":"not_observed"}"#));
         assert!(!ndjson_not_obs.contains("unknown"));
+    }
+
+    #[test]
+    fn test_format_directory_entry_node_canonical_fields_and_knowledge_variants() {
+        use crate::protobuf::{
+            DirectoryEntryNode, ExternalReferenceStatusProto, LinkCountKnowledgeProto,
+            LinkCountKnowledgeStatus,
+        };
+
+        // 1. Variant with Known link count and ConfirmedNone
+        let node_known = DirectoryEntryNode {
+            id: 10,
+            parent_id: 1,
+            name: "sample_file.dat".to_string(),
+            entry_kind: 2, // File
+            logical_bytes: 1048576,
+            referenced_allocated_bytes: 2097152,
+            allocated_size_known: true,
+            child_count: 0,
+            has_children: false,
+            unique_allocated_bytes: 1048576,
+            observed_alias_count: 2,
+            total_link_count: Some(LinkCountKnowledgeProto {
+                status: LinkCountKnowledgeStatus::Known as i32,
+                count: 2,
+            }),
+            external_reference_status:
+                ExternalReferenceStatusProto::ExternalReferenceStatusConfirmedNone as i32,
+            known_subtotal_allocated_bytes: 2097152,
+        };
+
+        let json_known = format_directory_entry_json(&node_known);
+        assert!(json_known.contains(r#""schema_version":"1.0""#));
+        assert!(json_known.contains(r#""id":10"#));
+        assert!(json_known.contains(r#""parent_id":1"#));
+        assert!(json_known.contains(r#""name":"sample_file.dat""#));
+        assert!(json_known.contains(r#""entry_kind":"file""#));
+        assert!(json_known.contains(r#""logical_bytes":1048576"#));
+        assert!(json_known.contains(r#""referenced_allocated_bytes":2097152"#));
+        assert!(json_known.contains(r#""unique_allocated_bytes":1048576"#));
+        assert!(json_known.contains(r#""allocated_size_known":true"#));
+        assert!(json_known.contains(r#""known_subtotal_allocated_bytes":2097152"#));
+        assert!(json_known.contains(r#""child_count":0"#));
+        assert!(json_known.contains(r#""has_children":false"#));
+        assert!(json_known.contains(r#""observed_alias_count":2"#));
+        assert!(json_known.contains(r#""total_link_count":{"value":2,"knowledge":"known"}"#));
+        assert!(!json_known.contains(r#""count":2"#));
+        assert!(!json_known.contains(r#""status":"known""#));
+        assert!(json_known.contains(r#""external_reference_status":"confirmed_none""#));
+
+        // 2. Variant with NotObserved link count and Indeterminate status
+        let node_not_obs = DirectoryEntryNode {
+            id: 11,
+            parent_id: 1,
+            name: "unobserved.bin".to_string(),
+            entry_kind: 2,
+            logical_bytes: 512,
+            referenced_allocated_bytes: 4096,
+            allocated_size_known: false,
+            child_count: 0,
+            has_children: false,
+            unique_allocated_bytes: 4096,
+            observed_alias_count: 1,
+            total_link_count: Some(LinkCountKnowledgeProto {
+                status: LinkCountKnowledgeStatus::NotObserved as i32,
+                count: 0,
+            }),
+            external_reference_status:
+                ExternalReferenceStatusProto::ExternalReferenceStatusIndeterminate as i32,
+            known_subtotal_allocated_bytes: 0,
+        };
+
+        let json_not_obs = format_directory_entry_json(&node_not_obs);
+        assert!(json_not_obs
+            .contains(r#""total_link_count":{"value":null,"knowledge":"not_observed"}"#));
+        assert!(!json_not_obs.contains(r#""status":"not_observed""#));
+        assert!(json_not_obs.contains(r#""external_reference_status":"indeterminate""#));
+        assert!(json_not_obs.contains(r#""allocated_size_known":false"#));
+
+        // 3. Variant with Unavailable link count and InconsistentEvidence
+        let node_unavail = DirectoryEntryNode {
+            id: 12,
+            parent_id: 1,
+            name: "inconsistent.bin".to_string(),
+            entry_kind: 2,
+            logical_bytes: 100,
+            referenced_allocated_bytes: 512,
+            allocated_size_known: true,
+            child_count: 0,
+            has_children: false,
+            unique_allocated_bytes: 512,
+            observed_alias_count: 3,
+            total_link_count: Some(LinkCountKnowledgeProto {
+                status: LinkCountKnowledgeStatus::Unavailable as i32,
+                count: 0,
+            }),
+            external_reference_status:
+                ExternalReferenceStatusProto::ExternalReferenceStatusInconsistentEvidence as i32,
+            known_subtotal_allocated_bytes: 512,
+        };
+
+        let json_unavail = format_directory_entry_json(&node_unavail);
+        assert!(
+            json_unavail.contains(r#""total_link_count":{"value":null,"knowledge":"unavailable"}"#)
+        );
+        assert!(!json_unavail.contains(r#""status":"unavailable""#));
+        assert!(json_unavail.contains(r#""external_reference_status":"inconsistent_evidence""#));
+
+        // 4. Variant with NotApplicable link count and NotApplicable status (directory entry)
+        let node_not_app = DirectoryEntryNode {
+            id: 1,
+            parent_id: 0,
+            name: "sub_dir".to_string(),
+            entry_kind: 1, // Directory
+            logical_bytes: 2048,
+            referenced_allocated_bytes: 8192,
+            allocated_size_known: true,
+            child_count: 5,
+            has_children: true,
+            unique_allocated_bytes: 4096,
+            observed_alias_count: 1,
+            total_link_count: Some(LinkCountKnowledgeProto {
+                status: LinkCountKnowledgeStatus::NotApplicable as i32,
+                count: 0,
+            }),
+            external_reference_status:
+                ExternalReferenceStatusProto::ExternalReferenceStatusNotApplicable as i32,
+            known_subtotal_allocated_bytes: 8192,
+        };
+
+        let json_not_app = format_directory_entry_json(&node_not_app);
+        assert!(json_not_app.contains(r#""entry_kind":"directory""#));
+        assert!(json_not_app.contains(r#""child_count":5"#));
+        assert!(json_not_app.contains(r#""has_children":true"#));
+        assert!(json_not_app
+            .contains(r#""total_link_count":{"value":null,"knowledge":"not_applicable"}"#));
+        assert!(!json_not_app.contains(r#""status":"not_applicable""#));
+        assert!(json_not_app.contains(r#""external_reference_status":"not_applicable""#));
+
+        // 5. Variant with ConfirmedExternal and None (unspecified) link count
+        let node_ext = DirectoryEntryNode {
+            id: 14,
+            parent_id: 1,
+            name: "external_link.dat".to_string(),
+            entry_kind: 2,
+            logical_bytes: 5000,
+            referenced_allocated_bytes: 8192,
+            allocated_size_known: true,
+            child_count: 0,
+            has_children: false,
+            unique_allocated_bytes: 8192,
+            observed_alias_count: 1,
+            total_link_count: None, // None -> maps to not_observed
+            external_reference_status:
+                ExternalReferenceStatusProto::ExternalReferenceStatusConfirmedExternal as i32,
+            known_subtotal_allocated_bytes: 8192,
+        };
+
+        let json_ext = format_directory_entry_json(&node_ext);
+        assert!(
+            json_ext.contains(r#""total_link_count":{"value":null,"knowledge":"not_observed"}"#)
+        );
+        assert!(json_ext.contains(r#""external_reference_status":"confirmed_external""#));
+
+        // 6. Proto unspecified external reference status fails-closed to indeterminate (never confirmed_none)
+        let node_unspecified = DirectoryEntryNode {
+            id: 15,
+            parent_id: 1,
+            name: "special_symlink".to_string(),
+            entry_kind: 3, // Special
+            logical_bytes: 0,
+            referenced_allocated_bytes: 0,
+            allocated_size_known: true,
+            child_count: 0,
+            has_children: false,
+            unique_allocated_bytes: 0,
+            observed_alias_count: 1,
+            total_link_count: None,
+            external_reference_status:
+                ExternalReferenceStatusProto::ExternalReferenceStatusUnspecified as i32,
+            known_subtotal_allocated_bytes: 0,
+        };
+
+        let json_unspecified = format_directory_entry_json(&node_unspecified);
+        assert!(json_unspecified.contains(r#""entry_kind":"special""#));
+        assert!(json_unspecified.contains(r#""external_reference_status":"indeterminate""#));
+        assert!(!json_unspecified.contains(r#""external_reference_status":"confirmed_none""#));
+
+        // 7. Unknown numeric enum integer fails-closed to indeterminate (never confirmed_none)
+        let node_unknown = DirectoryEntryNode {
+            id: 16,
+            parent_id: 1,
+            name: "unknown_status_file.dat".to_string(),
+            entry_kind: 2,
+            logical_bytes: 128,
+            referenced_allocated_bytes: 512,
+            allocated_size_known: true,
+            child_count: 0,
+            has_children: false,
+            unique_allocated_bytes: 512,
+            observed_alias_count: 1,
+            total_link_count: None,
+            external_reference_status: 99, // Unknown numeric value
+            known_subtotal_allocated_bytes: 512,
+        };
+
+        let json_unknown = format_directory_entry_json(&node_unknown);
+        assert!(json_unknown.contains(r#""external_reference_status":"indeterminate""#));
+        assert!(!json_unknown.contains(r#""external_reference_status":"confirmed_none""#));
+    }
+
+    #[test]
+    fn test_format_directory_entry_escaping_and_ndjson_event() {
+        use crate::protobuf::{
+            DirectoryEntryNode, LinkCountKnowledgeProto, LinkCountKnowledgeStatus,
+        };
+
+        let challenging_name = "funny \"quotes\" & \\backslashes\\ \n \r \t \x08 \x0c \x1f test";
+        let node = DirectoryEntryNode {
+            id: 99,
+            parent_id: 10,
+            name: challenging_name.to_string(),
+            entry_kind: 2,
+            logical_bytes: 42,
+            referenced_allocated_bytes: 4096,
+            allocated_size_known: true,
+            child_count: 0,
+            has_children: false,
+            unique_allocated_bytes: 4096,
+            observed_alias_count: 1,
+            total_link_count: Some(LinkCountKnowledgeProto {
+                status: LinkCountKnowledgeStatus::Known as i32,
+                count: 1,
+            }),
+            external_reference_status: 1,
+            known_subtotal_allocated_bytes: 4096,
+        };
+
+        // Standalone JSON
+        let json_line = format_directory_entry_json(&node);
+        // NDJSON single line must not have unescaped newlines or carriage returns
+        assert!(!json_line.contains('\n'));
+        assert!(!json_line.contains('\r'));
+        assert!(json_line.contains(r#"\backslashes\"#));
+        assert!(json_line.contains(r#"\n"#));
+        assert!(json_line.contains(r#"\r"#));
+        assert!(json_line.contains(r#"\t"#));
+        assert!(json_line.contains(r#"\b"#));
+        assert!(json_line.contains(r#"\f"#));
+        assert!(json_line.contains(r#"\u001f"#));
+        let ndjson_line = format_directory_entry_ndjson(&node);
+        assert_eq!(json_line, ndjson_line);
+
+        // NDJSON event envelope
+        let event =
+            format_directory_entry_ndjson_event("op-12345", 42, "2026-08-29T12:00:00.000Z", &node);
+        assert!(!event.contains('\n'));
+        assert!(!event.contains('\r'));
+        assert!(event.contains(r#""operation_id":"op-12345""#));
+        assert!(event.contains(r#""sequence_number":42"#));
+        assert!(event.contains(r#""timestamp":"2026-08-29T12:00:00.000Z""#));
+        assert!(event.contains(r#""schema_version":"1.0""#));
+        assert!(event.contains(r#""phase":"finalizing""#));
+        assert!(event.contains(r#""channel":"data""#));
+        assert!(event.contains(r#""provenance":"win32_directory_traversal""#));
+        assert!(event.contains(r#""payload":{"schema_version":"1.0","id":99,"parent_id":10"#));
     }
 }
