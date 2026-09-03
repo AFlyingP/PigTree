@@ -9,7 +9,7 @@ pub use builder::{build_graph_from_reader, format_utc_iso, GraphBuilder};
 pub use error::GraphBuildError;
 pub use graph::{
     CompactEntry, DirectoryGraph, EntryKind, EntryStorage, GraphEntry, GraphQueryError,
-    ObjectRecord, NO_OBJECT, StreamBreakdown,
+    ObjectRecord, StreamBreakdown, NO_OBJECT,
 };
 pub use pigtree_ipc::CancelHandle;
 pub use runner::{

@@ -1066,9 +1066,7 @@ fn test_cli_scan_valid_hierarchy_ndjson_mode() {
                 Some(0.0)
             );
             assert_eq!(
-                payload
-                    .get("logical_bytes")
-                    .and_then(|v| v.as_f64()),
+                payload.get("logical_bytes").and_then(|v| v.as_f64()),
                 Some(135.0)
             );
         } else {
@@ -1133,8 +1131,7 @@ fn test_cli_scan_target_with_spaces() {
     assert_eq!(json.get("directories").and_then(|v| v.as_f64()), Some(1.0));
     assert_eq!(json.get("files").and_then(|v| v.as_f64()), Some(1.0));
     assert_eq!(
-        json.get("logical_bytes")
-            .and_then(|v| v.as_f64()),
+        json.get("logical_bytes").and_then(|v| v.as_f64()),
         Some(19.0)
     );
 

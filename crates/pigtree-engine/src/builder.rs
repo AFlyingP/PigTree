@@ -2,8 +2,7 @@
 
 use crate::error::GraphBuildError;
 use crate::graph::{
-    CompactEntry, DirectoryGraph, EntryKind, EntryStorage, ObjectRecord, StreamBreakdown,
-    NO_OBJECT,
+    CompactEntry, DirectoryGraph, EntryKind, EntryStorage, ObjectRecord, StreamBreakdown, NO_OBJECT,
 };
 use pigtree_protocol::protobuf::ScanProgress;
 use pigtree_protocol::{
@@ -325,11 +324,11 @@ impl GraphBuilder {
     /// the parent object ends up unresolvable (identity unobserved), the
     /// stream has no attributable owner and is dropped.
     fn ingest_stream(&mut self, stream: StreamObservation) -> Result<(), GraphBuildError> {
-        let entry_idx = self
-            .storage_get_idx(stream.parent_entry_id)
-            .ok_or(GraphBuildError::UnknownStreamParent {
+        let entry_idx = self.storage_get_idx(stream.parent_entry_id).ok_or(
+            GraphBuildError::UnknownStreamParent {
                 entry_id: stream.parent_entry_id,
-            })?;
+            },
+        )?;
 
         self.pending_streams.push((
             entry_idx,

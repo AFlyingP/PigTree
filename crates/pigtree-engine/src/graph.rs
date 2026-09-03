@@ -273,7 +273,7 @@ impl DirectoryGraph {
             .into_iter()
             .filter_map(|obj_idx| {
                 let obj = &self.objects[obj_idx as usize];
-                let identity = obj.identity.clone()?;
+                let identity = obj.identity?;
                 Some(HardLinkSummary {
                     identity,
                     observed_alias_count: obj.observed_alias_count,
@@ -526,7 +526,9 @@ impl DirectoryGraph {
                                                     name: s.name.clone(),
                                                     logical_bytes: s.logical_bytes,
                                                     allocated_bytes: s.allocated_bytes.unwrap_or(0),
-                                                    allocated_size_known: s.allocated_bytes.is_some(),
+                                                    allocated_size_known: s
+                                                        .allocated_bytes
+                                                        .is_some(),
                                                 }
                                             })
                                             .collect()

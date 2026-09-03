@@ -254,8 +254,7 @@ fn format_hard_links_array(reports: &[HardLinkObjectReport]) -> String {
         if i > 0 {
             out.push(',');
         }
-        let guid_hex: String =
-            r.volume_guid.iter().map(|b| format!("{b:02x}")).collect();
+        let guid_hex: String = r.volume_guid.iter().map(|b| format!("{b:02x}")).collect();
         let link_json = format_link_count_knowledge(r.total_link_count.as_ref());
         let status_str = external_reference_status_to_str(r.external_reference_status);
         let paths: Vec<String> = r
@@ -1148,7 +1147,10 @@ mod tests {
             }),
             external_reference_status:
                 ExternalReferenceStatusProto::ExternalReferenceStatusIndeterminate as i32,
-            entry_paths: vec![r"C:\Root\a.dat".to_string(), r"C:\Root\Sub\b.dat".to_string()],
+            entry_paths: vec![
+                r"C:\Root\a.dat".to_string(),
+                r"C:\Root\Sub\b.dat".to_string(),
+            ],
         };
         let populated = format_scan_terminal_json(&base(vec![report.clone()]));
         assert!(populated.contains(

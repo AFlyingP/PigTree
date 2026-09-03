@@ -1010,10 +1010,8 @@ fn test_stream_observation_truncated_record_fails_closed() {
     // A truncated stream record (alloc flag claims a payload that isn't there)
     // must surface a decode error, never a silently wrong observation.
     let mut buf = Vec::new();
-    {
-        let writer = ObservationWriter::new(&mut buf, r"C:\Target").expect("writer");
-        drop(writer);
-    }
+    // new() writes the header immediately; the writer need not outlive it.
+    ObservationWriter::new(&mut buf, r"C:\Target").expect("writer");
     buf.extend_from_slice(&[RecordTag::ContentStream as u8]);
     buf.extend_from_slice(&1u32.to_le_bytes());
     buf.extend_from_slice(&0u64.to_le_bytes());

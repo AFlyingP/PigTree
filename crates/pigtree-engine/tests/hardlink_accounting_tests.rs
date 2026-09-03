@@ -1845,8 +1845,24 @@ fn test_hard_link_objects_report_paths_and_counts() {
     let mut writer = ObservationWriter::new(&mut buf, r"C:\Root").unwrap();
 
     // The real worker names the root record with the full target path.
-    emit_dir(&mut writer, 1, 0, r"C:\Root", None, None, ValueKnowledge::NotObserved);
-    emit_dir(&mut writer, 2, 1, "Sub", None, None, ValueKnowledge::NotObserved);
+    emit_dir(
+        &mut writer,
+        1,
+        0,
+        r"C:\Root",
+        None,
+        None,
+        ValueKnowledge::NotObserved,
+    );
+    emit_dir(
+        &mut writer,
+        2,
+        1,
+        "Sub",
+        None,
+        None,
+        ValueKnowledge::NotObserved,
+    );
 
     let aliased = ObjectIdentity::new(volume(4), 44);
     emit_file(
@@ -1897,7 +1913,11 @@ fn test_hard_link_objects_report_paths_and_counts() {
     let graph = build_graph(buf);
     let reports = graph.hard_link_objects();
 
-    assert_eq!(reports.len(), 2, "aliased pair plus confirmed-external object");
+    assert_eq!(
+        reports.len(),
+        2,
+        "aliased pair plus confirmed-external object"
+    );
 
     let aliased_report = &reports[0];
     assert_eq!(aliased_report.identity, aliased);
@@ -1907,8 +1927,12 @@ fn test_hard_link_objects_report_paths_and_counts() {
         ExternalReferenceStatus::Indeterminate
     );
     assert_eq!(aliased_report.entry_paths.len(), 2);
-    assert!(aliased_report.entry_paths.contains(&r"C:\Root\a.dat".to_string()));
-    assert!(aliased_report.entry_paths.contains(&r"C:\Root\Sub\b.dat".to_string()));
+    assert!(aliased_report
+        .entry_paths
+        .contains(&r"C:\Root\a.dat".to_string()));
+    assert!(aliased_report
+        .entry_paths
+        .contains(&r"C:\Root\Sub\b.dat".to_string()));
 
     let external_report = &reports[1];
     assert_eq!(external_report.identity, external);
@@ -1917,5 +1941,8 @@ fn test_hard_link_objects_report_paths_and_counts() {
         external_report.external_reference_status,
         ExternalReferenceStatus::ConfirmedExternal
     );
-    assert_eq!(external_report.entry_paths, vec![r"C:\Root\ext.dat".to_string()]);
+    assert_eq!(
+        external_report.entry_paths,
+        vec![r"C:\Root\ext.dat".to_string()]
+    );
 }
