@@ -5,8 +5,9 @@ use pigtree_ipc::win32::*;
 use pigtree_ipc::FrameReadiness;
 use pigtree_protocol::protobuf::{
     command_request, command_response, CancelResponse, CommandResponse, CoverageGapReport,
-    EchoResponse, ErrorResponse, GetChildrenResponse, HealthResponse, PingResponse, ScanResponse,
-    ScanRunOutcome, ScopeCoverage, ShutdownResponse, StatusResponse, VersionResponse,
+    EchoResponse, ErrorResponse, ExternalReferenceStatusProto, GetChildrenResponse,
+    HardLinkObjectReport, HealthResponse, PingResponse, ScanResponse, ScanRunOutcome,
+    ScopeCoverage, ShutdownResponse, StatusResponse, VersionResponse,
 };
 use std::env;
 use std::process::ExitCode;
@@ -577,6 +578,21 @@ fn run() -> u8 {
                         let resp_known_subtotal = graph.known_subtotal_allocated_bytes();
                         let resp_indeterminate_objects =
                             graph.indeterminate_external_reference_objects();
+                        let resp_hard_links: Vec<HardLinkObjectReport> = graph
+                            .hard_link_objects()
+                            .into_iter()
+                            .map(|o| HardLinkObjectReport {
+                                volume_guid: o.identity.volume_guid.to_vec(),
+                                file_id_hi: (o.identity.file_id >> 64) as u64,
+                                file_id_lo: o.identity.file_id as u64,
+                                observed_alias_count: o.observed_alias_count,
+                                total_link_count: Some(o.total_link_count.into()),
+                                external_reference_status: ExternalReferenceStatusProto::from(
+                                    o.external_reference_status,
+                                ) as i32,
+                                entry_paths: o.entry_paths,
+                            })
+                            .collect();
 
                         settled_scan = Some(SettledScan {
                             operation_id: active_op_id.clone(),
@@ -602,6 +618,7 @@ fn run() -> u8 {
                             unique_allocated_bytes: resp_unique_allocated_bytes,
                             known_subtotal_allocated_bytes: resp_known_subtotal,
                             indeterminate_external_reference_objects: resp_indeterminate_objects,
+                            hard_links: resp_hard_links,
                         }
                     }
                     Some(Ok(Err(_err))) => {
@@ -629,6 +646,7 @@ fn run() -> u8 {
                             unique_allocated_bytes: 0,
                             known_subtotal_allocated_bytes: 0,
                             indeterminate_external_reference_objects: 0,
+                            hard_links: Vec::new(),
                         }
                     }
                     _ => {
@@ -656,6 +674,7 @@ fn run() -> u8 {
                             unique_allocated_bytes: 0,
                             known_subtotal_allocated_bytes: 0,
                             indeterminate_external_reference_objects: 0,
+                            hard_links: Vec::new(),
                         }
                     }
                 };

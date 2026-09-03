@@ -1832,3 +1832,90 @@ fn test_stream_referencing_unobserved_entry_fails_closed() {
         "unexpected error: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Matrix 13: Target-grain hard link reports (AC-10 / AC-3 sibling context).
+// Objects with alias or definitive external evidence are reported with their
+// in-target entry paths; ordinary single-link files stay out of the report.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_hard_link_objects_report_paths_and_counts() {
+    let mut buf = Vec::new();
+    let mut writer = ObservationWriter::new(&mut buf, r"C:\Root").unwrap();
+
+    // The real worker names the root record with the full target path.
+    emit_dir(&mut writer, 1, 0, r"C:\Root", None, None, ValueKnowledge::NotObserved);
+    emit_dir(&mut writer, 2, 1, "Sub", None, None, ValueKnowledge::NotObserved);
+
+    let aliased = ObjectIdentity::new(volume(4), 44);
+    emit_file(
+        &mut writer,
+        3,
+        1,
+        "a.dat",
+        100,
+        Some(4096),
+        Some(aliased),
+        ValueKnowledge::NotObserved,
+    );
+    emit_file(
+        &mut writer,
+        4,
+        2,
+        "b.dat",
+        100,
+        Some(4096),
+        Some(aliased),
+        ValueKnowledge::NotObserved,
+    );
+
+    let external = ObjectIdentity::new(volume(4), 45);
+    emit_file(
+        &mut writer,
+        5,
+        1,
+        "ext.dat",
+        50,
+        Some(2048),
+        Some(external),
+        ValueKnowledge::Known(2),
+    );
+    emit_file(
+        &mut writer,
+        6,
+        1,
+        "plain.dat",
+        10,
+        Some(16),
+        None,
+        ValueKnowledge::NotObserved,
+    );
+
+    emit_terminal(&mut writer, 2, 4, 260, 10256);
+
+    let graph = build_graph(buf);
+    let reports = graph.hard_link_objects();
+
+    assert_eq!(reports.len(), 2, "aliased pair plus confirmed-external object");
+
+    let aliased_report = &reports[0];
+    assert_eq!(aliased_report.identity, aliased);
+    assert_eq!(aliased_report.observed_alias_count, 2);
+    assert_eq!(
+        aliased_report.external_reference_status,
+        ExternalReferenceStatus::Indeterminate
+    );
+    assert_eq!(aliased_report.entry_paths.len(), 2);
+    assert!(aliased_report.entry_paths.contains(&r"C:\Root\a.dat".to_string()));
+    assert!(aliased_report.entry_paths.contains(&r"C:\Root\Sub\b.dat".to_string()));
+
+    let external_report = &reports[1];
+    assert_eq!(external_report.identity, external);
+    assert_eq!(external_report.observed_alias_count, 1);
+    assert_eq!(
+        external_report.external_reference_status,
+        ExternalReferenceStatus::ConfirmedExternal
+    );
+    assert_eq!(external_report.entry_paths, vec![r"C:\Root\ext.dat".to_string()]);
+}

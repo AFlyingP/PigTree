@@ -50,6 +50,17 @@ pub struct StreamBreakdown {
     pub allocated_bytes: Option<u64>,
 }
 
+/// Scan Target grain summary of one distinct Filesystem Object that has alias
+/// or external-reference evidence, with the entry paths that refer to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HardLinkSummary {
+    pub identity: ObjectIdentity,
+    pub observed_alias_count: u32,
+    pub total_link_count: ValueKnowledge<u32>,
+    pub external_reference_status: ExternalReferenceStatus,
+    pub entry_paths: Vec<String>,
+}
+
 /// Compact memory-efficient representation of an entry in the directory graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactEntry {
@@ -211,6 +222,91 @@ impl DirectoryGraph {
                 .unwrap_or(&[]),
             _ => &[],
         }
+    }
+
+    /// Summaries of every distinct Filesystem Object that carries alias or
+    /// external-reference evidence, together with the in-target entry paths
+    /// that refer to it. Only objects worth reporting are included: two or
+    /// more observed aliases, or a derived external status that says
+    /// something definitive about links outside the target.
+    pub fn hard_link_objects(&self) -> Vec<HardLinkSummary> {
+        let relevant: Vec<usize> = self
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(_, obj)| {
+                obj.observed_alias_count >= 2
+                    || matches!(
+                        obj.external_reference_status,
+                        ExternalReferenceStatus::ConfirmedExternal
+                            | ExternalReferenceStatus::InconsistentEvidence
+                    )
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+        if relevant.is_empty() {
+            return Vec::new();
+        }
+        let relevant: HashMap<u32, usize> =
+            relevant.into_iter().map(|idx| (idx as u32, idx)).collect();
+
+        let mut by_object: HashMap<u32, Vec<String>> = HashMap::new();
+        let mut ordered: Vec<u32> = Vec::with_capacity(relevant.len());
+        for idx in 0..self.storage.len() {
+            let Some(compact) = self.storage.get_by_index(idx) else {
+                continue;
+            };
+            if relevant.contains_key(&compact.object_index) {
+                if let Some(path) = self.display_path(compact.id) {
+                    if !by_object.contains_key(&compact.object_index) {
+                        ordered.push(compact.object_index);
+                    }
+                    by_object
+                        .entry(compact.object_index)
+                        .or_default()
+                        .push(path);
+                }
+            }
+        }
+
+        ordered
+            .into_iter()
+            .filter_map(|obj_idx| {
+                let obj = &self.objects[obj_idx as usize];
+                let identity = obj.identity.clone()?;
+                Some(HardLinkSummary {
+                    identity,
+                    observed_alias_count: obj.observed_alias_count,
+                    total_link_count: obj.total_link_count,
+                    external_reference_status: obj.external_reference_status,
+                    entry_paths: by_object.remove(&obj_idx).unwrap_or_default(),
+                })
+            })
+            .collect()
+    }
+
+    /// Display path of an entry: the root target followed by entry names.
+    fn display_path(&self, id: u32) -> Option<String> {
+        let mut names: Vec<&str> = Vec::new();
+        let mut current = self.storage.get(id)?;
+        loop {
+            names.push(&current.name);
+            if current.parent_id == 0 {
+                break;
+            }
+            current = self.storage.get(current.parent_id)?;
+        }
+        let root = names.last()?;
+        let mut path = root.to_string();
+        if !path.ends_with('\\') {
+            path.push('\\');
+        }
+        for name in names.iter().rev().skip(1) {
+            path.push_str(name);
+            path.push('\\');
+        }
+        path.pop();
+        Some(path)
     }
 
     pub fn gaps(&self) -> &[CoverageGapObservation] {
