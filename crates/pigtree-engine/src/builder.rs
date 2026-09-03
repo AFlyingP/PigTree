@@ -2,13 +2,14 @@
 
 use crate::error::GraphBuildError;
 use crate::graph::{
-    CompactEntry, DirectoryGraph, EntryKind, EntryStorage, ObjectRecord, NO_OBJECT,
+    CompactEntry, DirectoryGraph, EntryKind, EntryStorage, ObjectRecord, StreamBreakdown,
+    NO_OBJECT,
 };
 use pigtree_protocol::protobuf::ScanProgress;
 use pigtree_protocol::{
     CoverageGapObservation, DirectoryObservation, ExternalReferenceStatus, FileObservation,
-    ObjectIdentity, ObservationReader, ObservationRecord, SpecialObservation, TerminalObservation,
-    ValueKnowledge,
+    ObjectIdentity, ObservationReader, ObservationRecord, SpecialObservation, StreamObservation,
+    TerminalObservation, ValueKnowledge,
 };
 use std::collections::HashMap;
 use std::io::Read;
@@ -28,6 +29,8 @@ pub struct GraphBuilder {
     dir_object_ids: HashMap<u32, ObjectIdentity>,
     file_link_counts: HashMap<u32, ValueKnowledge<u32>>,
     dir_self_alloc: Vec<u64>,
+    pending_streams: Vec<(usize, StreamBreakdown)>,
+    object_streams: HashMap<u32, Vec<StreamBreakdown>>,
     gaps: Vec<CoverageGapObservation>,
     terminal: Option<TerminalObservation>,
     dir_count: u64,
@@ -54,6 +57,8 @@ impl GraphBuilder {
             dir_object_ids: HashMap::new(),
             file_link_counts: HashMap::new(),
             dir_self_alloc: Vec::with_capacity(INITIAL_CAPACITY),
+            pending_streams: Vec::new(),
+            object_streams: HashMap::new(),
             gaps: Vec::new(),
             terminal: None,
             dir_count: 0,
@@ -88,6 +93,7 @@ impl GraphBuilder {
                 self.current_dir_id = special.parent_id;
                 self.ingest_special(special)
             }
+            ObservationRecord::ContentStream(stream) => self.ingest_stream(stream),
             ObservationRecord::CoverageGap(gap) => {
                 self.gaps.push(gap);
                 Ok(())
@@ -310,6 +316,42 @@ impl GraphBuilder {
         self.validate_and_insert_entry(special.entry_id, special.parent_id, entry, 0)?;
         self.special_count += 1;
         Ok(())
+    }
+
+    /// Attributes a secondary content stream to the object behind its parent
+    /// entry. Streams never create entries and never change scope aggregates;
+    /// object records are only finalized at settlement, so the parent entry
+    /// index is captured now and the mapping to an object happens there. When
+    /// the parent object ends up unresolvable (identity unobserved), the
+    /// stream has no attributable owner and is dropped.
+    fn ingest_stream(&mut self, stream: StreamObservation) -> Result<(), GraphBuildError> {
+        let entry_idx = self
+            .storage_get_idx(stream.parent_entry_id)
+            .ok_or(GraphBuildError::UnknownStreamParent {
+                entry_id: stream.parent_entry_id,
+            })?;
+
+        self.pending_streams.push((
+            entry_idx,
+            StreamBreakdown {
+                name: stream.name,
+                logical_bytes: stream.logical_size,
+                allocated_bytes: stream.allocated_size,
+            },
+        ));
+        Ok(())
+    }
+
+    fn storage_get_idx(&self, id: u32) -> Option<usize> {
+        if self.is_dense {
+            if id == 0 || id as usize > self.entries.len() {
+                None
+            } else {
+                Some(id as usize - 1)
+            }
+        } else {
+            self.id_to_idx.get(&id).map(|&idx| idx as usize)
+        }
     }
 
     fn ingest_terminal(&mut self, term: TerminalObservation) -> Result<(), GraphBuildError> {
@@ -569,6 +611,23 @@ impl GraphBuilder {
                         weight: entry.allocated_size.unwrap_or(0),
                     });
                     entry.object_index = obj_idx;
+                }
+            }
+        }
+
+        // Object records are final here: attribute pending streams to their
+        // owning objects, preserving observation order. Streams whose parent
+        // object was never resolved stay dropped — they have no owner.
+        let pending_streams = std::mem::take(&mut self.pending_streams);
+        if !pending_streams.is_empty() {
+            self.object_streams.reserve(pending_streams.len());
+            for (entry_idx, breakdown) in pending_streams {
+                let object_index = self.entries[entry_idx].object_index;
+                if object_index != NO_OBJECT {
+                    self.object_streams
+                        .entry(object_index)
+                        .or_default()
+                        .push(breakdown);
                 }
             }
         }
@@ -837,6 +896,7 @@ impl GraphBuilder {
                 storage: EntryStorage::Dense(Vec::new()),
                 all_children: Vec::new(),
                 objects: Vec::new(),
+                object_streams: self.object_streams,
                 gaps: self.gaps,
                 terminal,
                 allocated_bytes_known: self.allocated_bytes_known,
@@ -861,6 +921,7 @@ impl GraphBuilder {
             storage,
             all_children,
             objects,
+            object_streams: self.object_streams,
             gaps: self.gaps,
             terminal,
             allocated_bytes_known: self.allocated_bytes_known,

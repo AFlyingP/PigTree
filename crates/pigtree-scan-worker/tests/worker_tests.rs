@@ -1253,3 +1253,28 @@ fn test_root_and_child_identity_alignment_issue_20() {
         );
     }
 }
+
+#[test]
+fn test_default_scan_never_emits_content_stream_records() {
+    // ADR 0001 / issue #20 Q4: the default profile leaves secondary content
+    // streams Not Observed. Even a file with ADS present must produce no
+    // ContentStream records; the stream seam only opens for explicit
+    // profiles and enrichments.
+    let temp = TempTestDir::new("no_ads_records");
+    let root = temp.path();
+
+    fs::write(root.join("plain.txt"), b"hello").unwrap();
+
+    let mut stream_buf = Vec::new();
+    let mut writer = ObservationWriter::new(&mut stream_buf, root.to_str().unwrap()).unwrap();
+    let term = scan_directory(root, &mut writer, &NoCancellation).expect("scan should succeed");
+    assert_eq!(term.outcome, RunOutcome::Finished);
+
+    let mut reader = ObservationReader::new(Cursor::new(&stream_buf)).unwrap();
+    while let Some(rec) = reader.read_record().unwrap() {
+        assert!(
+            !matches!(rec, ObservationRecord::ContentStream(_)),
+            "default scan must never emit a ContentStream record, got {rec:?}"
+        );
+    }
+}

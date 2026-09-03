@@ -40,6 +40,16 @@ pub struct ObjectRecord {
     pub weight: u64,
 }
 
+/// Size breakdown of one observed secondary content stream. Streams are
+/// components of their owning object; they never create entries and never
+/// change the object's own contribution to scope aggregates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamBreakdown {
+    pub name: String,
+    pub logical_bytes: u64,
+    pub allocated_bytes: Option<u64>,
+}
+
 /// Compact memory-efficient representation of an entry in the directory graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactEntry {
@@ -160,6 +170,7 @@ pub struct DirectoryGraph {
     pub(crate) storage: EntryStorage,
     pub(crate) all_children: Vec<u32>,
     pub(crate) objects: Vec<ObjectRecord>,
+    pub(crate) object_streams: HashMap<u32, Vec<StreamBreakdown>>,
     pub(crate) gaps: Vec<CoverageGapObservation>,
     pub(crate) terminal: TerminalObservation,
     pub(crate) allocated_bytes_known: bool,
@@ -186,6 +197,20 @@ impl DirectoryGraph {
     pub fn entry(&self, id: u32) -> Option<GraphEntry> {
         let compact = self.storage.get(id)?;
         Some(self.project_graph_entry(compact))
+    }
+
+    /// Observed secondary content streams of the object behind `entry_id`,
+    /// in observation order. Empty unless an explicit profile or enrichment
+    /// enumerated them.
+    pub fn streams_for_entry(&self, entry_id: u32) -> &[StreamBreakdown] {
+        match self.storage.get(entry_id) {
+            Some(compact) if compact.object_index != NO_OBJECT => self
+                .object_streams
+                .get(&compact.object_index)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]),
+            _ => &[],
+        }
     }
 
     pub fn gaps(&self) -> &[CoverageGapObservation] {
@@ -394,6 +419,26 @@ impl DirectoryGraph {
                             total_link_count,
                             external_reference_status: external_status,
                             known_subtotal_allocated_bytes: compact.known_subtotal_allocated_bytes,
+                            content_streams: if compact.object_index != NO_OBJECT {
+                                self.object_streams
+                                    .get(&compact.object_index)
+                                    .map(|streams| {
+                                        streams
+                                            .iter()
+                                            .map(|s| {
+                                                pigtree_protocol::protobuf::ContentStreamProto {
+                                                    name: s.name.clone(),
+                                                    logical_bytes: s.logical_bytes,
+                                                    allocated_bytes: s.allocated_bytes.unwrap_or(0),
+                                                    allocated_size_known: s.allocated_bytes.is_some(),
+                                                }
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default()
+                            } else {
+                                Vec::new()
+                            },
                         }
                     })
                 })

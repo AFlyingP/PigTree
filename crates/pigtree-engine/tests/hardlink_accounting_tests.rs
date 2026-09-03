@@ -1,8 +1,8 @@
 use pigtree_engine::{build_graph_from_reader, DirectoryGraph};
 use pigtree_protocol::{
     DirectoryObservation, ExternalReferenceStatus, FileObservation, ObjectIdentity,
-    ObservationReader, ObservationWriter, RunOutcome, SpecialObservation, TerminalObservation,
-    ValueKnowledge,
+    ObservationReader, ObservationWriter, RunOutcome, SpecialObservation, StreamObservation,
+    TerminalObservation, ValueKnowledge,
 };
 use std::io::Cursor;
 
@@ -1705,4 +1705,130 @@ fn test_cloud_placeholder_logical_preserved_allocation_observed_or_unknown() {
     assert_eq!(root.referenced_allocated_bytes, 0);
     assert_eq!(root.unique_allocated_bytes, 0);
     assert_eq!(graph.total_entries(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// Matrix 12: Secondary content streams (AC-9). Streams break down per object,
+// never create entries, and never inflate parent aggregates. The default
+// profile never emits them; here the stream records arrive via the same v2
+// writer an explicit enrichment would use.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_content_streams_breakdown_attributed_without_entry_inflation() {
+    let mut buf = Vec::new();
+    let mut writer = ObservationWriter::new(&mut buf, r"C:\Test").unwrap();
+
+    emit_root(&mut writer);
+
+    let shared_id = ObjectIdentity::new(volume(3), 33);
+    emit_file(
+        &mut writer,
+        2,
+        1,
+        "alias_a.dat",
+        100,
+        Some(4096),
+        Some(shared_id),
+        ValueKnowledge::NotObserved,
+    );
+    emit_file(
+        &mut writer,
+        3,
+        1,
+        "alias_b.dat",
+        100,
+        Some(4096),
+        Some(shared_id),
+        ValueKnowledge::NotObserved,
+    );
+    emit_file(
+        &mut writer,
+        4,
+        1,
+        "plain.dat",
+        50,
+        Some(2048),
+        None,
+        ValueKnowledge::NotObserved,
+    );
+
+    // An enrichment observes two named streams on the shared object.
+    writer
+        .write_stream(&StreamObservation {
+            parent_entry_id: 2,
+            name: "zone.identifier".to_string(),
+            logical_size: 42,
+            allocated_size: Some(512),
+        })
+        .unwrap();
+    writer
+        .write_stream(&StreamObservation {
+            parent_entry_id: 3,
+            name: "cache".to_string(),
+            logical_size: 4096,
+            allocated_size: None,
+        })
+        .unwrap();
+
+    emit_terminal(&mut writer, 1, 3, 250, 10240);
+
+    let graph = build_graph(buf);
+
+    // Streams ride on the object, so both aliases of it expose the same breakdown.
+    assert_eq!(graph.streams_for_entry(2).len(), 2);
+    assert_eq!(graph.streams_for_entry(3).len(), 2);
+    assert_eq!(graph.streams_for_entry(2), graph.streams_for_entry(3));
+    assert_eq!(graph.streams_for_entry(2)[0].name, "zone.identifier");
+    assert_eq!(graph.streams_for_entry(2)[0].logical_bytes, 42);
+    assert_eq!(graph.streams_for_entry(2)[0].allocated_bytes, Some(512));
+    assert_eq!(graph.streams_for_entry(2)[1].allocated_bytes, None);
+
+    // The plain file has no streams, and neither has the directory.
+    assert!(graph.streams_for_entry(4).is_empty());
+    assert!(graph.streams_for_entry(1).is_empty());
+
+    // Nothing inflated: entry counts unchanged, aggregates untouched by streams.
+    assert_eq!(graph.total_entries(), 4);
+    let root = graph.root();
+    assert_eq!(root.logical_size, Some(250));
+    assert_eq!(root.referenced_allocated_bytes, 4096 + 4096 + 2048);
+    assert_eq!(root.unique_allocated_bytes, 4096 + 2048);
+    assert!(root.allocated_size_known);
+}
+
+#[test]
+fn test_stream_referencing_unobserved_entry_fails_closed() {
+    let mut buf = Vec::new();
+    let mut writer = ObservationWriter::new(&mut buf, r"C:\Test").unwrap();
+
+    emit_root(&mut writer);
+    emit_file(
+        &mut writer,
+        2,
+        1,
+        "orphan_target.txt",
+        10,
+        Some(16),
+        None,
+        ValueKnowledge::NotObserved,
+    );
+
+    writer
+        .write_stream(&StreamObservation {
+            parent_entry_id: 9, // never observed
+            name: "ghost".to_string(),
+            logical_size: 1,
+            allocated_size: None,
+        })
+        .unwrap();
+
+    emit_terminal(&mut writer, 1, 1, 10, 16);
+
+    let reader = ObservationReader::new(Cursor::new(buf)).unwrap();
+    let err = build_graph_from_reader(reader).unwrap_err();
+    assert!(
+        err.to_string().contains("entry 9"),
+        "unexpected error: {err}"
+    );
 }
