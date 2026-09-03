@@ -3,7 +3,10 @@ use pigtree_cli::{
     EXIT_COVERAGE_GAPS_PRESENT, EXIT_OPERATION_FAILED, EXIT_SUCCESS,
 };
 use pigtree_ipc::client::ScanCallOutcome;
-use pigtree_protocol::protobuf::{CoverageGapReport, ScanResponse, ScanRunOutcome, ScopeCoverage};
+use pigtree_protocol::protobuf::{
+    CoverageGapReport, ExternalReferenceStatusProto, HardLinkObjectReport, ScanResponse,
+    ScanRunOutcome, ScopeCoverage,
+};
 
 fn make_sample_response(
     run_outcome: ScanRunOutcome,
@@ -30,7 +33,35 @@ fn make_sample_response(
         unique_allocated_bytes: if allocated_bytes_known { 2048 } else { 0 },
         known_subtotal_allocated_bytes: if allocated_bytes_known { 2048 } else { 0 },
         indeterminate_external_reference_objects: 0,
+        hard_links: Vec::new(),
     }
+}
+
+#[test]
+fn test_finished_json_reports_hard_link_objects() {
+    let mut resp = make_sample_response(
+        ScanRunOutcome::Finished,
+        ScopeCoverage::Complete,
+        true,
+        vec![],
+    );
+    resp.hard_links.push(HardLinkObjectReport {
+        volume_guid: vec![0xAB; 16],
+        file_id_hi: 0,
+        file_id_lo: 77,
+        observed_alias_count: 2,
+        total_link_count: Some(pigtree_protocol::protobuf::LinkCountKnowledgeProto {
+            status: pigtree_protocol::protobuf::LinkCountKnowledgeStatus::Known as i32,
+            count: 2,
+        }),
+        external_reference_status:
+            ExternalReferenceStatusProto::ExternalReferenceStatusConfirmedNone as i32,
+        entry_paths: vec![r"C:\test\target\a.dat".to_string()],
+    });
+
+    let settlement = settle_scan_response(OutputFormat::Json, &resp, false, 1);
+    assert_eq!(settlement.exit_code, EXIT_SUCCESS);
+    assert!(settlement.stdout.contains(r#""hard_links":[{"volume_guid":"abababababababababababababababab","file_id":"77","observed_alias_count":2,"total_link_count":{"value":2,"knowledge":"known"},"external_reference_status":"confirmed_none","entry_paths":["C:\\test\\target\\a.dat"]}]"#));
 }
 
 #[test]

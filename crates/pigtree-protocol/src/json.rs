@@ -1,9 +1,9 @@
 //! Structured JSON output formatting for CLI stdout envelopes and stderr diagnostics.
 
 use crate::protobuf::{
-    CoverageGapReport, DirectoryEntryNode, EchoResponse, HealthResponse, LinkCountKnowledgeProto,
-    LinkCountKnowledgeStatus, PingResponse, ScanProgress, ScanResponse, StatusResponse,
-    VersionResponse,
+    CoverageGapReport, DirectoryEntryNode, EchoResponse, HardLinkObjectReport, HealthResponse,
+    LinkCountKnowledgeProto, LinkCountKnowledgeStatus, PingResponse, ScanProgress, ScanResponse,
+    StatusResponse, VersionResponse,
 };
 
 /// Escapes a string for JSON output according to RFC 8259.
@@ -160,9 +160,10 @@ pub fn format_scan_terminal_json(resp: &ScanResponse) -> String {
     let directory_entries = resp.directory_count + resp.file_count + resp.special_count;
     let knowledge_str = allocation_knowledge_str(resp.allocated_bytes_known);
     let gaps_json = format_coverage_gaps_array(&resp.coverage_gaps);
+    let hard_links_json = format_hard_links_array(&resp.hard_links);
 
     format!(
-        r#"{{"operation_id":{},"schema_version":"2.0","run_outcome":{},"observation_interval":{{"started_at":{},"completed_at":{}}},"scope_coverage":{},"directory_entries":{},"directories":{},"files":{},"special_objects":{},"logical_bytes":{},"referenced_allocated_bytes":{{"value":{},"knowledge":{}}},"unique_allocated_bytes":{{"value":{},"knowledge":{}}},"known_subtotal_allocated_bytes":{},"indeterminate_external_reference_objects":{},"coverage_gaps":{}}}"#,
+        r#"{{"operation_id":{},"schema_version":"2.0","run_outcome":{},"observation_interval":{{"started_at":{},"completed_at":{}}},"scope_coverage":{},"directory_entries":{},"directories":{},"files":{},"special_objects":{},"logical_bytes":{},"referenced_allocated_bytes":{{"value":{},"knowledge":{}}},"unique_allocated_bytes":{{"value":{},"knowledge":{}}},"known_subtotal_allocated_bytes":{},"indeterminate_external_reference_objects":{},"hard_links":{},"coverage_gaps":{}}}"#,
         escape_json_string(&resp.operation_id),
         escape_json_string(outcome_str),
         escape_json_string(&resp.observation_started_iso),
@@ -179,6 +180,7 @@ pub fn format_scan_terminal_json(resp: &ScanResponse) -> String {
         escape_json_string(knowledge_str),
         resp.known_subtotal_allocated_bytes,
         resp.indeterminate_external_reference_objects,
+        hard_links_json,
         gaps_json
     )
 }
@@ -216,9 +218,10 @@ pub fn format_scan_terminal_ndjson_event(resp: &ScanResponse, sequence_number: u
     let directory_entries = resp.directory_count + resp.file_count + resp.special_count;
     let knowledge_str = allocation_knowledge_str(resp.allocated_bytes_known);
     let gaps_json = format_coverage_gaps_array(&resp.coverage_gaps);
+    let hard_links_json = format_hard_links_array(&resp.hard_links);
 
     format!(
-        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"2.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{{"run_outcome":{},"observation_interval":{{"started_at":{},"completed_at":{}}},"scope_coverage":{},"directory_entries":{},"directories":{},"files":{},"special_objects":{},"logical_bytes":{},"referenced_allocated_bytes":{{"value":{},"knowledge":{}}},"unique_allocated_bytes":{{"value":{},"knowledge":{}}},"known_subtotal_allocated_bytes":{},"indeterminate_external_reference_objects":{},"coverage_gaps":{}}}}}"#,
+        r#"{{"operation_id":{},"sequence_number":{},"timestamp":{},"schema_version":"2.0","phase":"finalizing","channel":"data","provenance":"win32_directory_traversal","payload":{{"run_outcome":{},"observation_interval":{{"started_at":{},"completed_at":{}}},"scope_coverage":{},"directory_entries":{},"directories":{},"files":{},"special_objects":{},"logical_bytes":{},"referenced_allocated_bytes":{{"value":{},"knowledge":{}}},"unique_allocated_bytes":{{"value":{},"knowledge":{}}},"known_subtotal_allocated_bytes":{},"indeterminate_external_reference_objects":{},"hard_links":{},"coverage_gaps":{}}}}}"#,
         escape_json_string(&resp.operation_id),
         sequence_number,
         escape_json_string(&resp.observation_completed_iso),
@@ -237,8 +240,41 @@ pub fn format_scan_terminal_ndjson_event(resp: &ScanResponse, sequence_number: u
         escape_json_string(knowledge_str),
         resp.known_subtotal_allocated_bytes,
         resp.indeterminate_external_reference_objects,
+        hard_links_json,
         gaps_json
     )
+}
+
+/// Formats the hard-link object reports of a scan as a JSON array. The 16-byte
+/// volume GUID is hex-encoded and the 128-bit File ID is decimal; both as
+/// strings so no consumer can lose precision on either half.
+fn format_hard_links_array(reports: &[HardLinkObjectReport]) -> String {
+    let mut out = String::from("[");
+    for (i, r) in reports.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let guid_hex: String =
+            r.volume_guid.iter().map(|b| format!("{b:02x}")).collect();
+        let link_json = format_link_count_knowledge(r.total_link_count.as_ref());
+        let status_str = external_reference_status_to_str(r.external_reference_status);
+        let paths: Vec<String> = r
+            .entry_paths
+            .iter()
+            .map(|p| escape_json_string(p))
+            .collect();
+        out.push_str(&format!(
+            r#"{{"volume_guid":{},"file_id":{},"observed_alias_count":{},"total_link_count":{},"external_reference_status":{},"entry_paths":[{}]}}"#,
+            escape_json_string(&guid_hex),
+            escape_json_string(&format!("{}", u128::from(r.file_id_hi) << 64 | u128::from(r.file_id_lo))),
+            r.observed_alias_count,
+            link_json,
+            escape_json_string(status_str),
+            paths.join(",")
+        ));
+    }
+    out.push(']');
+    out
 }
 
 /// Converts an entry_kind integer (1=directory, 2=file, 3=special) to its lowercase string.
@@ -568,6 +604,7 @@ mod tests {
             unique_allocated_bytes: 1536,
             known_subtotal_allocated_bytes: 2048,
             indeterminate_external_reference_objects: 2,
+            hard_links: Vec::new(),
         };
 
         let json_doc = format_scan_terminal_json(&resp);
@@ -671,6 +708,7 @@ mod tests {
             unique_allocated_bytes: 4096,
             known_subtotal_allocated_bytes: 4096,
             indeterminate_external_reference_objects: 0,
+            hard_links: Vec::new(),
         };
         let json_known = format_scan_terminal_json(&resp_known);
         assert!(json_known
@@ -706,6 +744,7 @@ mod tests {
             unique_allocated_bytes: 0,
             known_subtotal_allocated_bytes: 0,
             indeterminate_external_reference_objects: 0,
+            hard_links: Vec::new(),
         };
         let json_zero = format_scan_terminal_json(&resp_known_zero);
         assert!(json_zero.contains(r#""unique_allocated_bytes":{"value":0,"knowledge":"known"}"#));
@@ -731,6 +770,7 @@ mod tests {
             unique_allocated_bytes: 2048,
             known_subtotal_allocated_bytes: 2048,
             indeterminate_external_reference_objects: 0,
+            hard_links: Vec::new(),
         };
         let json_not_obs = format_scan_terminal_json(&resp_not_observed);
         assert!(json_not_obs
@@ -1063,5 +1103,60 @@ mod tests {
             r#""content_streams":[{"name":"zone.identifier","logical_bytes":42,"allocated_bytes":512,"allocated_size_known":true},{"name":"cache","logical_bytes":4096,"allocated_bytes":0,"allocated_size_known":false}]"#
         ));
         assert!(format_directory_entry_ndjson(&node) == json_with);
+    }
+
+    #[test]
+    fn test_scan_terminal_json_hard_links_array() {
+        use crate::protobuf::{
+            ExternalReferenceStatusProto, HardLinkObjectReport, LinkCountKnowledgeProto,
+            LinkCountKnowledgeStatus, ScanResponse,
+        };
+
+        let base = |hard_links: Vec<HardLinkObjectReport>| ScanResponse {
+            operation_id: "scan-7".to_string(),
+            target_path: r"C:\Root".to_string(),
+            run_outcome: 1,
+            observation_started_iso: "2026-08-29T10:00:00.000Z".to_string(),
+            observation_completed_iso: "2026-08-29T10:00:01.000Z".to_string(),
+            scope_coverage: 1,
+            directory_count: 2,
+            file_count: 2,
+            special_count: 0,
+            logical_bytes: 150,
+            allocated_bytes: 4096,
+            allocated_bytes_known: true,
+            coverage_gaps: vec![],
+            duration_ms: 1000,
+            referenced_allocated_bytes: 6144,
+            unique_allocated_bytes: 5120,
+            known_subtotal_allocated_bytes: 6144,
+            indeterminate_external_reference_objects: 1,
+            hard_links,
+        };
+
+        let empty = format_scan_terminal_json(&base(Vec::new()));
+        assert!(empty.contains(r#""hard_links":[]"#));
+
+        let report = HardLinkObjectReport {
+            volume_guid: vec![0xAB; 16],
+            file_id_hi: 0,
+            file_id_lo: 1001,
+            observed_alias_count: 2,
+            total_link_count: Some(LinkCountKnowledgeProto {
+                status: LinkCountKnowledgeStatus::NotObserved as i32,
+                count: 0,
+            }),
+            external_reference_status:
+                ExternalReferenceStatusProto::ExternalReferenceStatusIndeterminate as i32,
+            entry_paths: vec![r"C:\Root\a.dat".to_string(), r"C:\Root\Sub\b.dat".to_string()],
+        };
+        let populated = format_scan_terminal_json(&base(vec![report.clone()]));
+        assert!(populated.contains(
+            r#""hard_links":[{"volume_guid":"abababababababababababababababab","file_id":"1001","observed_alias_count":2,"total_link_count":{"value":null,"knowledge":"not_observed"},"external_reference_status":"indeterminate","entry_paths":["C:\\Root\\a.dat","C:\\Root\\Sub\\b.dat"]}]"#
+        ));
+
+        let event = format_scan_terminal_ndjson_event(&base(vec![report]), 9);
+        assert!(event.contains(r#""hard_links":[{"volume_guid":"abab"#));
+        assert!(event.contains(r#""entry_paths":["C:\\Root\\a.dat""#));
     }
 }

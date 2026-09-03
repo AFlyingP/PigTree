@@ -2,7 +2,8 @@ use pigtree_protocol::protobuf::{
     command_request, command_response, decode_message, encode_message, AuthHandshakeRequest,
     AuthHandshakeResponse, CancelRequest, CancelResponse, CommandRequest, CommandResponse,
     CoverageGapReport, DirectoryEntryNode, EchoRequest, EchoResponse, ErrorResponse,
-    GetChildrenRequest, GetChildrenResponse, HealthRequest, HealthResponse, PingRequest,
+    ExternalReferenceStatusProto, GetChildrenRequest, GetChildrenResponse, HardLinkObjectReport,
+    HealthRequest, HealthResponse, LinkCountKnowledgeProto, LinkCountKnowledgeStatus, PingRequest,
     PingResponse, ScanProgress, ScanRequest, ScanResponse, ScanRunOutcome, ScopeCoverage,
     ShutdownRequest, ShutdownResponse, StatusRequest, StatusResponse, VersionRequest,
     VersionResponse,
@@ -572,6 +573,22 @@ fn test_scan_response_roundtrip() {
             unique_allocated_bytes: 10737418240,
             known_subtotal_allocated_bytes: 10737418240,
             indeterminate_external_reference_objects: 7,
+            hard_links: vec![HardLinkObjectReport {
+                volume_guid: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+                file_id_hi: 0,
+                file_id_lo: 42,
+                observed_alias_count: 2,
+                total_link_count: Some(LinkCountKnowledgeProto {
+                    status: LinkCountKnowledgeStatus::Known as i32,
+                    count: 2,
+                }),
+                external_reference_status:
+                    ExternalReferenceStatusProto::ExternalReferenceStatusConfirmedNone as i32,
+                entry_paths: vec![
+                    r"C:\Data\Target\a.dat".to_string(),
+                    r"C:\Data\Target\b.dat".to_string(),
+                ],
+            }],
         })),
     };
 
@@ -787,6 +804,7 @@ fn test_scan_response_allocated_bytes_not_observed_roundtrip() {
             unique_allocated_bytes: 204800,
             known_subtotal_allocated_bytes: 204800,
             indeterminate_external_reference_objects: 0,
+            hard_links: Vec::new(),
         })),
     };
 

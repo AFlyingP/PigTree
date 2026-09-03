@@ -141,6 +141,20 @@ message LinkCountKnowledgeProto {
   uint32 count = 2;
 }
 
+// One distinct Filesystem Object with alias or external-reference evidence,
+// reported at Scan Target grain for automation consumers (issue #20 AC-10).
+// volume_guid is the 16-byte Windows volume GUID; the 128-bit File ID is
+// split into hi/lo 64-bit halves.
+message HardLinkObjectReport {
+  bytes volume_guid = 1;
+  uint64 file_id_hi = 2;
+  uint64 file_id_lo = 3;
+  uint32 observed_alias_count = 4;
+  LinkCountKnowledgeProto total_link_count = 5;
+  ExternalReferenceStatusProto external_reference_status = 6;
+  repeated string entry_paths = 7;
+}
+
 message CoverageGapReport {
   string display_path = 1;
   string status_code = 2;
@@ -221,6 +235,7 @@ message ScanResponse {
   uint64 unique_allocated_bytes = 16;
   uint64 known_subtotal_allocated_bytes = 17;
   uint64 indeterminate_external_reference_objects = 18;
+  repeated HardLinkObjectReport hard_links = 19;
 }
 
 message CommandRequest {
